@@ -1,8 +1,8 @@
 {
-  "version": "5.25",
+  "version": "5.24",
   "build_date": "2026-05-21",
   "binary": "https://raw.githubusercontent.com/piklz/heltec-wifikit32-DHT-MONITOR/main/firmware/heltec_wifkit32v2_v524_D49CE8EF_firmware.ino.bin",
-  "size": 1380.3,
+  "size": 1384.3,
   "crc32": "D49CE8EF",
-  "changelog": "Added GitHub OTA check, streaming install from GitHub, server-side CRC32, post-update boot splash"
+  "changelog": "Added GitHub OTA check + streaming install from GitHub, server-side CRC32, post-update boot splash"
 }
