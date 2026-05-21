@@ -1,8 +1,8 @@
 {
-  "version": "5.21",
-  "build_date": "2026-05-20",
-  "binary": "https://raw.githubusercontent.com/piklz/heltec-wifikit32-DHT-MONITOR/main/firmware/heltec_wifkit32v2_v521_11F821DD_firmware.ino.bin",
-  "size": 1376.4,
-  "crc32": "11F821DD",
+  "version": "5.23",
+  "build_date": "2026-05-21",
+  "binary": "https://raw.githubusercontent.com/piklz/heltec-wifikit32-DHT-MONITOR/main/firmware/heltec_wifkit32v2_v523_BE6F003E_firmware.ino.bin",
+  "size": 1380.3,
+  "crc32": "BE6F003E",
   "changelog": "Added GitHub OTA check, streaming install from GitHub, server-side CRC32, post-update boot splash"
 }
