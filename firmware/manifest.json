@@ -4,5 +4,5 @@
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.25/heltec_wifkit32v2_v525_C0ADC18D_firmware.ino.bin",
   "size": 1386.2,
   "crc32": "C0ADC18D",
-  "changelog": "Added GitHub OTA check + streaming install from GitHub, server-side CRC32, post-update boot splash ,calibration tweaked to handle both"
+  "changelog": "action tester Added GitHub OTA check + streaming install from GitHub, server-side CRC32, post-update boot splash ,calibration tweaked to handle both"
 }
