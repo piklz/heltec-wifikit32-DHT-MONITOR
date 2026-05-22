@@ -68,7 +68,6 @@ jobs:
         env:
           GITHUB_REPO: ${{ github.repository }}
         run: |
-          # Corrected path to match your exact repository structure
           MANIFEST_PATH="firmware/manifest.json"
           
           # 1. Parse target version from your initial manifest modification
@@ -90,7 +89,12 @@ jobs:
           NEW_NAME="heltec_wifkit32v2_v${VERSION//./}_${CRC32}_firmware.ino.bin"
           mv "$TARGET_BIN" "./build/$NEW_NAME"
           
-          # 4. Use Python to inject metrics safely into manifest.json
+          # 4. Use Python to inject metrics safely into manifest.json by passing variables from the environment context
+          export D_VERSION="$VERSION"
+          export D_NAME="$NEW_NAME"
+          export D_SIZE="$SIZE_KB"
+          export D_CRC32="$CRC32"
+          
           python3 -c "
           import json
           import os
@@ -99,11 +103,11 @@ jobs:
           with open('$MANIFEST_PATH', 'r') as f:
               data = json.load(f)
           
-          # Injecting/updating the real production parameters
+          # Injecting/updating the production parameters safely from the environment map
           data['build_date'] = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-          data['binary'] = f'https://github.com/' + os.environ['GITHUB_REPO'] + f'/releases/download/v$VERSION/{NEW_NAME}'
-          data['size'] = float('$SIZE_KB')
-          data['crc32'] = '$CRC32'
+          data['binary'] = f'https://github.com/' + os.environ['GITHUB_REPO'] + f'/releases/download/v' + os.environ['D_VERSION'] + '/' + os.environ['D_NAME']
+          data['size'] = float(os.environ['D_SIZE'])
+          data['crc32'] = os.environ['D_CRC32']
           
           with open('$MANIFEST_PATH', 'w') as f:
               json.dump(data, f, indent=2)
