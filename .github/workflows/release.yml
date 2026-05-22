@@ -33,13 +33,16 @@ jobs:
 
       - name: Install System Dependencies & Custom Libraries
         run: |
-          arduino-cli lib install "Heltec ESP32 Dev-Boards"
+          
+          arduino-cli lib install "Heltec ESP32 Dev-Boards"          
+          arduino-cli lib install "WiFiManager"          
           arduino-cli lib install "PubSubClient"
           arduino-cli lib install "DHT sensor library"
           arduino-cli lib install "Adafruit Unified Sensor"
           arduino-cli lib install "ArduinoJson"
           arduino-cli lib install "OneButton"
           arduino-cli lib install "JLed"
+          
 
       - name: Compile Heltec V2 Binary
         run: |
