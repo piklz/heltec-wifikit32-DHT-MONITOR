@@ -1,0 +1,48 @@
+- name: Update Manifest, Rename Binary, and Calculate CRC32
+        id: process_artifacts
+        run: |
+          MANIFEST_PATH="main/firmware/manifest.json"
+          
+          # 1. Parse target version and changelog that you manually typed into the manifest
+          VERSION=$(python3 -c "import json; print(json.load(open('$MANIFEST_PATH'))['version'])")
+          CHANGELOG=$(python3 -c "import json; print(json.load(open('$MANIFEST_PATH'))['changelog'])")
+          echo "Processing Firmware Version: $VERSION"
+          
+          # 2. Grab the actual binary output, get its size in KB, and calculate its true CRC32 checksum
+          TARGET_BIN=$(ls ./build/*.bin | grep -v "bootloader" | grep -v "partitions" | head -n 1)
+          
+          # Calculate size in KB (bytes / 1024) rounded to 1 decimal place
+          SIZE_BYTES=$(stat -c%s "$TARGET_BIN")
+          SIZE_KB=$(python3 -c "print(round($SIZE_BYTES / 1024, 1))")
+          
+          # Compute CRC32
+          CRC32=$(python3 -c "import zlib; print(f'{zlib.crc32(open(\"$TARGET_BIN\", \"rb\").read()):08X}')")
+          echo "Computed Binary CRC32: $CRC32"
+          
+          # 3. Format the exact expected binary asset name matching your scheme
+          NEW_NAME="heltec_wifkit32v2_v${VERSION//./}_${CRC32}_firmware.ino.bin"
+          mv "$TARGET_BIN" "./build/$NEW_NAME"
+          
+          # 4. Rewrite manifest.json with your exact keys and the freshly calculated data
+          python3 -c "
+          import json
+          from datetime import datetime
+          
+          # Read existing manifest to preserve the version and changelog you pushed
+          with open('$MANIFEST_PATH', 'r') as f:
+              data = json.load(f)
+          
+          # Update with the new automated runner metrics
+          data['build_date'] = datetime.utcnow().strftime('%Y-%m-%d')
+          data['binary'] = f'https://github.com/${{ github.repository }}/releases/download/v{VERSION}/{NEW_NAME}'
+          data['size'] = float('$SIZE_KB')
+          data['crc32'] = '$CRC32'
+          
+          # Write it back neatly formatted
+          with open('$MANIFEST_PATH', 'w') as f:
+              json.dump(data, f, indent=2)
+          "
+          
+          # 5. Export values to environment steps for the release tagger
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "filename=$NEW_NAME" >> $GITHUB_OUTPUT
