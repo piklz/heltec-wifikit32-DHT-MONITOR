@@ -68,7 +68,8 @@ jobs:
         env:
           GITHUB_REPO: ${{ github.repository }}
         run: |
-          MANIFEST_PATH="main/firmware/manifest.json"
+          # Corrected path to match your exact repository structure
+          MANIFEST_PATH="firmware/manifest.json"
           
           # 1. Parse target version from your initial manifest modification
           VERSION=$(python3 -c "import json; print(json.load(open('$MANIFEST_PATH'))['version'])")
