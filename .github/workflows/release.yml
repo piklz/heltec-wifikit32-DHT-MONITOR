@@ -68,7 +68,7 @@ jobs:
         env:
           GITHUB_REPO: ${{ github.repository }}
         run: |
-          MANIFEST_PATH="firmware/manifest.json"
+          MANIFEST_PATH="main/firmware/manifest.json"
           
           # 1. Parse target version from your initial manifest modification
           VERSION=$(python3 -c "import json; print(json.load(open('$MANIFEST_PATH'))['version'])")
@@ -93,14 +93,14 @@ jobs:
           python3 -c "
           import json
           import os
-          from datetime import datetime
+          from datetime import datetime, timezone
           
           with open('$MANIFEST_PATH', 'r') as f:
               data = json.load(f)
           
           # Injecting/updating the real production parameters
-          data['build_date'] = datetime.utcnow().strftime('%Y-%m-%d')
-          data['binary'] = f'https://github.com/' + os.environ['GITHUB_REPO'] + f'/releases/download/v{VERSION}/{NEW_NAME}'
+          data['build_date'] = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+          data['binary'] = f'https://github.com/' + os.environ['GITHUB_REPO'] + f'/releases/download/v$VERSION/{NEW_NAME}'
           data['size'] = float('$SIZE_KB')
           data['crc32'] = '$CRC32'
           
