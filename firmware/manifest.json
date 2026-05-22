@@ -1,8 +1,8 @@
 {
   "version": "5.25",
-  "build_date": "2026-05-21",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.25/heltec_wifkit32v2_v525_C0ADC18D_firmware.ino.bin",
-  "size": 1386.2,
-  "crc32": "C0ADC18D",
+  "build_date": "2026-05-22",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.25/heltec_wifkit32v2_v525_FABE4117_firmware.ino.bin",
+  "size": 1387.5,
+  "crc32": "FABE4117",
   "changelog": "11 action tester Added GitHub OTA check + streaming install from GitHub, server-side CRC32, post-update boot splash ,calibration tweaked to handle both"
 }
