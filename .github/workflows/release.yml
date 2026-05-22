@@ -48,10 +48,11 @@ jobs:
         run: |
           SKETCH_DIR=$(dirname $(find . -name "*.ino" | head -n 1))
           
-          # Forces the Arduino compiler to use the 3MB Huge APP layout, matching your local IDE settings
+          # Force default properties to pass pre-flight validation, 
+          # which allows the compiler to seamlessly read your local partitions.csv instead.
           arduino-cli compile \
             --fqbn esp32:esp32:heltec_wifi_kit_32 \
-            --board-options "PartitionScheme=min_spiffs" \
+            --board-options "PartitionScheme=default" \
             --output-dir ./build "$SKETCH_DIR"
 
       - name: Update Manifest, Rename Binary, and Calculate CRC32
