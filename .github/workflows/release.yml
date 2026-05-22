@@ -34,8 +34,12 @@ jobs:
       - name: Install System Dependencies & Custom Libraries
         run: |
           
-          arduino-cli lib install "Heltec ESP32 Dev-Boards"          
-          arduino-cli lib install "WiFiManager"          
+          arduino-cli lib install "Heltec ESP32 Dev-Boards"
+          
+          
+          arduino-cli lib install --git-url https://github.com/tzapu/WiFiManager.git
+          
+          
           arduino-cli lib install "PubSubClient"
           arduino-cli lib install "DHT sensor library"
           arduino-cli lib install "Adafruit Unified Sensor"
@@ -48,12 +52,12 @@ jobs:
         run: |
           SKETCH_DIR=$(dirname $(find . -name "*.ino" | head -n 1))
           
-          # Compiles using the generic profile (for the 1.9MB partition room) 
-          # while passing the exact Heltec V2 hardware macros via build flags.
+          # Target the true Heltec board, but inject custom partition overrides 
+          # to bypass the restrictive core menu validation.
           arduino-cli compile \
-            --fqbn esp32:esp32:esp32 \
-            --board-options "PartitionScheme=min_spiffs" \
-            --build-property "build.extra_flags=-DSDA_OLED=4 -DSCL_OLED=15 -DRST_OLED=16 -DLED_BUILTIN=25 -DVext=21" \
+            --fqbn esp32:esp32:heltec_wifi_kit_32 \
+            --build-property "build.partitions=partitions" \
+            --build-property "upload.maximum_size=1966080" \
             --output-dir ./build "$SKETCH_DIR"
 
       - name: Update Manifest, Rename Binary, and Calculate CRC32
