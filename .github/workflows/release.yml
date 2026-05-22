@@ -34,10 +34,13 @@ jobs:
       - name: Install System Dependencies & Custom Libraries
         run: |
           
+          mkdir -p $HOME/Arduino/libraries
+          
+          
+          git clone https://github.com/tzapu/WiFiManager.git $HOME/Arduino/libraries/WiFiManager
+          
+          
           arduino-cli lib install "Heltec ESP32 Dev-Boards"
-          
-          
-          arduino-cli lib install --git-url https://github.com/tzapu/WiFiManager.git
           
           
           arduino-cli lib install "PubSubClient"
