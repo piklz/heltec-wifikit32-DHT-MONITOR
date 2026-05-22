@@ -47,7 +47,12 @@ jobs:
       - name: Compile Heltec V2 Binary
         run: |
           SKETCH_DIR=$(dirname $(find . -name "*.ino" | head -n 1))
-          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_kit_32 --output-dir ./build "$SKETCH_DIR"
+          
+          # Forces the Arduino compiler to use the 3MB Huge APP layout, matching your local IDE settings
+          arduino-cli compile \
+            --fqbn esp32:esp32:heltec_wifi_kit_32 \
+            --board-options "PartitionScheme=min_spiffs" \
+            --output-dir ./build "$SKETCH_DIR"
 
       - name: Update Manifest, Rename Binary, and Calculate CRC32
         id: process_artifacts
