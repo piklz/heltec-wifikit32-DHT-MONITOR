@@ -48,9 +48,12 @@ jobs:
         run: |
           SKETCH_DIR=$(dirname $(find . -name "*.ino" | head -n 1))
           
+          # Compiles using the generic profile (for the 1.9MB partition room) 
+          # while passing the exact Heltec V2 hardware macros via build flags.
           arduino-cli compile \
             --fqbn esp32:esp32:esp32 \
             --board-options "PartitionScheme=min_spiffs" \
+            --build-property "build.extra_flags=-DSDA_OLED=4 -DSCL_OLED=15 -DRST_OLED=16 -DLED_BUILTIN=25 -DVext=21" \
             --output-dir ./build "$SKETCH_DIR"
 
       - name: Update Manifest, Rename Binary, and Calculate CRC32
