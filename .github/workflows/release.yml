@@ -3,7 +3,7 @@ name: End-to-End Automated Firmware and Manifest Sync
 on:
   push:
     paths:
-      - 'main/firmware/manifest.json' # The automation triggers ONLY when you update this manifest file
+      - 'firmware/manifest.json' # The automation triggers ONLY when you update this manifest file
 
 # Give the workflow permission to write updates back into your repository and create releases
 permissions:
@@ -51,7 +51,7 @@ jobs:
         env:
           GITHUB_REPO: ${{ github.repository }}
         run: |
-          MANIFEST_PATH="main/firmware/manifest.json"
+          MANIFEST_PATH="firmware/manifest.json"
           
           # 1. Parse target version from your initial manifest modification
           VERSION=$(python3 -c "import json; print(json.load(open('$MANIFEST_PATH'))['version'])")
@@ -100,7 +100,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add main/firmware/manifest.json
+          git add firmware/manifest.json
           # Only commit if changes exist to prevent empty run loops
           git diff-index --quiet HEAD || git commit -m "chore: automated manifest update for v${{ steps.process_artifacts.outputs.version }} [skip ci]"
           git push origin main
