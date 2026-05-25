@@ -4,5 +4,5 @@
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.26/heltec_wifkit32v2_v526_C974B4D0_firmware.ino.bin",
   "size": 1389.3,
   "crc32": "C974B4D0",
-  "changelog": "calibrate button fixed text missing , calibration tweaked overall yay !!"
+  "changelog": "calibrate button fixed text missing , calibration tweaked overall yay !!!"
 }
