@@ -3803,7 +3803,7 @@ void setupOTA() {
             savedMode + ": <strong>" + String(newFactor, 4) + "</strong>"
             " &nbsp;&rarr;&nbsp; reads " + String(realV, 3) + "V"
             "<br><span style='font-size:13px;color:#9e9e9e'>Next: " + nextInstr +
-            "</span><br><a href='/calibrate' style='color:#64B5F6;font-size:13px'>"
+            "</span><br><a href='/calibrate' style='font-size:13px'>"
             "&#x21B3; Calibrate " + nextMode + " now</a>",
             6, "/calibrate"));
         return;
