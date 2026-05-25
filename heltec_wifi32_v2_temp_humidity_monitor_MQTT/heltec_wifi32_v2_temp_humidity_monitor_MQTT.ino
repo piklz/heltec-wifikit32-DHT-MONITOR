@@ -7,8 +7,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.25
- * Last Updated:  2026-05-21
+ * Version:       5.26
+ * Last Updated:  2026-05-25
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -24,8 +24,53 @@
  *  • Deep sleep support for low-power operation
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.25 — 2026-05-21
+ * CHANGELOG v5.26 — 2026-05-25
  * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: learnedVFull was always reset to 3.92V on every calibration save,
+ *         even when calibrating on USB. This corrupted the battery % curve
+ *         (adaptive full-voltage lost) until the battery re-learned it.
+ *         Fix: learnedVFull reset only occurs in battery-only calibration mode.
+ *  - FIX: Back-calculation race in /calibrate POST. batteryVoltFloat is
+ *         rewritten every 5s by battery_read(); if the power source changed
+ *         between the last read and the form submit, activeFactor would not
+ *         match the factor used to produce batteryVoltFloat, giving a wrong
+ *         new calibration factor. Fix: global lastRawAvgMv stores the raw
+ *         ADC millivolts from every battery_read() and boot read; calibration
+ *         back-calc uses it directly (newFactor = realV / (lastRawAvgMv/1000))
+ *         — no round-trip through batteryVoltFloat needed.
+ *  - FIX: Silent calibration rejection. When batteryVoltFloat < 100 (battery
+ *         not yet read — e.g. page loaded immediately at boot), submitting the
+ *         form re-rendered the page with no feedback. Now shows a red error
+ *         card: "Reading not ready — wait a few seconds and try again."
+ *  - IMPROVE: /calibrate success page now redirects to /calibrate (not /)
+ *         so the user lands directly on step 2 without manual navigation.
+ *  - IMPROVE: /calibrate page gains step-completion indicators. Each of the
+ *         two mode rows in the "Stored Calibration Factors" table now shows:
+ *         ✅ calibrated (factor differs from default) or ⏳ not yet set.
+ *         The "Next step" hint in the success message is now a clickable link.
+ *  - IMPROVE: Input placeholder voltage now correctly shows typical USB-only
+ *         floating range (0.000) when isBatFloating is true, preventing
+ *         a user from entering a real voltage for a no-battery condition.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * REQUIRED LIBRARIES
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  • WiFiManager (tzapu) — WiFi network configuration
+ *  • PubSubClient — MQTT protocol support
+ *  • DHT + Adafruit Sensor — Temperature/humidity sensing
+ *  • ArduinoJson v7 — JSON parsing & serialization
+ *  • OneButton — Button handling with multi-tap detection
+ *  • JLed — LED animation effects
+ *  • HTTPClient (built-in) — HTTP requests & OTA
+ *  • Heltec Board Package — Hardware-specific libraries
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+/*
+ * ESP32 Complete IoT System — Heltec WiFi Kit 32 V2
+ * VERSION: 5.26 — 2026-05-25
+ *
+ * CHANGELOG v5.26 — 2026-05-25:
  *  - FIX: Single vdivFactor calibrated on USB gave wrong reading on battery.
  *         Root cause: ESP32 ADC is non-linear; the built-in eFuse calibration
  *         curve reduces but does not eliminate voltage-dependent offset (~2%
@@ -45,19 +90,326 @@
  *         the correct NVS key, shows BOTH factors, and tells you which mode
  *         to calibrate next. Clear instructions guide USB-first, battery-second.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * REQUIRED LIBRARIES
- * ─────────────────────────────────────────────────────────────────────────────
- *  • WiFiManager (tzapu) — WiFi network configuration
- *  • PubSubClient — MQTT protocol support
- *  • DHT + Adafruit Sensor — Temperature/humidity sensing
- *  • ArduinoJson v7 — JSON parsing & serialization
- *  • OneButton — Button handling with multi-tap detection
- *  • JLed — LED animation effects
- *  • HTTPClient (built-in) — HTTP requests & OTA
- *  • Heltec Board Package — Hardware-specific libraries
+ * CHANGELOG v5.24 — 2026-05-21:
+ *  - FIX: /ota_check route now properly flags otaUpdateAvailable so the dashboard
+ *         banner AND the OTA page both refresh immediately after a manual check.
+ *         The /ota_check JSON response now includes build_date so the OTA page
+ *         can show the full manifest card without a second fetch.
+ *  - FIX: Dashboard OTA banner linked to /ota_install_github (404). Corrected to
+ *         /ota_install — the actual server route for the GitHub streaming install.
+ *  - FIX: OTA ntfy notification cooldown was millis()-based (lastOtaNtfy) and
+ *         reset to 0 on every deep-sleep wake. Now NVS-persisted as epoch
+ *         ("ota"/"ntfy_ep") so the 24-hour cooldown correctly spans sleep cycles.
+ *  - FIX: power_src missing from Adafruit IO boot publish (power-source feed).
+ *  - FIX: power_src missing from Ubidots boot payload JSON.
+ *  - ADD: ota_available field in Standard MQTT boot and sensor payloads so HA /
+ *         Node-RED can see whether a firmware update is pending.
+ *  - ADD: OTA page "Check Now" button now shows a full manifest card when an
+ *         update is found: remote version, build date, changelog, manifest CRC32,
+ *         file size, and an "Install from GitHub" button. File CRC32 is compared
+ *         live against the manifest CRC32 with colour coding (green=match, red=mismatch).
+ *  - CHANGE: OLED OTA-available indicator changed from right-aligned "\x18UPD"
+ *            to a filled up-arrow triangle + "FW" label, starting at x=68
+ *            (just after the widest frame header "SYSTEM INFO" / "MQTT STATUS").
+ *            Visible, unambiguous, and consistent across all 5 frames.
  *
- * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.23 — 2026-05-21:
+ *  - FIX: Battery source detection false-positive "USB/ONLY" on real battery.
+ *         Root cause A: variance check `vvar <= 25 && v < BAT_USB_THRESHOLD`
+ *         was triggering on a stable LiPo at 3.8V. A real battery at float charge
+ *         is very stable — low variance is NOT a reliable indicator of no-cell.
+ *         Only v < BAT_FLOAT_VOLTAGE (2.8V) reliably means "no cell present".
+ *         Fix: removed variance criterion from isBatFloating entirely. Now only:
+ *           isBatFloating = (v < BAT_FLOAT_VOLTAGE)
+ *         Same fix applied to boot battery read.
+ *  - FIX: Battery source false "USB/CHG" on first read after boot on battery.
+ *         Root cause B: lastHighVoltageTime initialised to 0 (global scope).
+ *         At first battery_read(), millis() might be ~3000ms. millis()-0 = 3000
+ *         which is < BAT_USB_HYSTERESIS_MS (30000), so the hysteresis arm fires
+ *         and sets isUSBPowered=true even though no USB voltage was ever seen.
+ *         Fix: added `bool hadHighVoltage = false` guard. Hysteresis only
+ *         applies after at least one genuine high-voltage reading.
+ *  - FIX: Ubidots/MQTT power_src field not using powerSrcJson() — was still
+ *         `isUSBPowered ? "usb" : "battery"`, missing the "usb_only" third state.
+ *  - ADD: Dashboard OTA update-available banner. When the manifest check finds a
+ *         newer version, a teal card appears at the TOP of the dashboard (matching
+ *         the green-box position shown in the screenshot). Shows version, date,
+ *         changelog, manifest CRC32, and direct "Install from GitHub" + "Upload
+ *         manually" buttons. Replaces the plain OTA button when update is available.
+ *  - ADD: OTA page remote info injection. GET handler now injects the manifest
+ *         CRC32, remote version, date, and changelog as a server-side rendered
+ *         card when an update is available. Lets user compare manifest CRC vs
+ *         computed file CRC before uploading.
+ *
+ * CHANGELOG v5.22 — 2026-05-20:
+ *  - FIX: WDT crash during OTA upload (Backtrace: 0x4008c8e7 ...).
+ *         Root cause: UPLOAD_FILE_WRITE calls Update.write() (flash, slow) with no
+ *         watchdog feed in the hot path. With a ~1.35MB binary this stalls the 30s WDT.
+ *         Fix: (a) esp_task_wdt_reset() called unconditionally at top of every
+ *         UPLOAD_FILE_WRITE callback. (b) WDT timeout temporarily raised to 120s
+ *         in UPLOAD_FILE_START and restored to WDT_TIMEOUT_SEC in UPLOAD_FILE_END /
+ *         completion handler, so a genuinely stalled upload is still caught.
+ *  - FIX: OTA check interval was millis()-based — millis() resets to ~0 on every
+ *         deep-sleep wake, so the 1-hour interval was meaningless. Replaced with
+ *         NVS-persisted epoch timestamp ("ota"/"last_chk"). Check runs at most once
+ *         per OTA_CHECK_INTERVAL_SECS (86400 = 1 day). Falls back to checking on
+ *         every wake if NTP is not yet synced (epoch=0). Also added:
+ *         RTC_DATA_ATTR bool rtcOtaAvailable — survives deep sleep without NVS read,
+ *         so OLED update-available icon persists across wake cycles between checks.
+ *  - ADD: OLED update-available indicator — small "^" arrow icon overlaid on frame
+ *         dot bar when rtcOtaAvailable is set. Mirrors pro hardware behaviour
+ *         (pending update visible on device itself, not just web UI / ntfy).
+ *  - FIX: Post-OTA boot splash not appearing — added Serial diagnostics for NVS
+ *         flag read; guarded against display not yet on by calling displayOn()
+ *         unconditionally inside showOtaBootSplash (was already there but now
+ *         also resets the ui frames so the splash isn't immediately overwritten).
+ *
+ * CHANGELOG v5.21 — 2026-05-20:
+ *  - ADD: GitHub OTA update check — fetches manifest.json from firmware repo,
+ *         compares semver against FW_VERSION, notifies via MQTT + ntfy when a
+ *         newer build is available. Checks once at boot + every OTA_CHECK_INTERVAL
+ *         (default 1 h). Notification cooldown 24 h to prevent spam.
+ *  - ADD: Streaming OTA from GitHub — /ota_install endpoint downloads the .bin
+ *         directly on-device via HTTPClient, streams to Update library, verifies
+ *         CRC32 against manifest value before marking flash valid. Full OLED
+ *         progress during download + flash. Aborts cleanly on CRC mismatch.
+ *  - ADD: Server-side CRC32 — all uploads (manual drag-drop + GitHub install)
+ *         now compute CRC32 incrementally in the upload handler. Displayed in
+ *         Serial log; matched against manifest value when installing from GitHub.
+ *  - ADD: FW_VER_MARKER — "FW_VER:5.21" embedded in .rodata so the OTA page JS
+ *         sniffVersion() finds the version reliably via marker search, with
+ *         pattern-scan fallback for older builds.
+ *  - ADD: Post-update OLED boot splash — after a successful OTA reboot the OLED
+ *         shows "FIRMWARE UPDATED / v5.20 → v5.21 / Boot#N" for ~8 s before the
+ *         normal rotating frames start. Previous version saved to NVS ("ota/prev_ver")
+ *         in the OTA completion handler; cleared after display.
+ *  - ADD: Dashboard update-available banner — blue card with version, changelog
+ *         snippet, and Install / Dismiss buttons when manifest reports newer build.
+ *  - IMPROVE: /ota_check web route — triggers an immediate manifest fetch and
+ *         returns JSON result (suitable for polling or manual triggering).
+ *
+ * CHANGELOG v5.20 — 2026-05-20:
+ *  - FIX: Battery source detection fully aligned across all outputs.
+ *         Three-state model: USB/ONLY (no cell, floating ADC), USB/CHG (cell+charging),
+ *         Battery (cell only). isBatFloating now detects sub-BAT_FLOAT_VOLTAGE (<2.8V)
+ *         OR low-variance sub-threshold, whichever triggers first. Both boot and
+ *         runtime reads use identical logic. Added BAT_FLOAT_VOLTAGE 2.8V define.
+ *         powerSrcStr() and powerSrcJson() helpers ensure all ntfy, MQTT, and
+ *         Serial outputs are coherently aligned. Serial now shows "USB/ONLY" when
+ *         no battery is detected (was incorrectly showing "USB/CHG" in some paths).
+ *  - IMPROVE: OTA page rebuilt — shows current→new version comparison, client-side
+ *         CRC32, file size, .merged.bin guard with hard block, clearer error messages
+ *         with recovery instructions. POST handler uses Update.begin(UPDATE_SIZE_UNKNOWN)
+ *         for correct partition sizing. OLED shows animated countdown (10s timer bar)
+ *         on success, failure reason on error.
+ *  - ADD: Screen clean preset 3 — "Full Bright Pulse": fills all 128×64 pixels
+ *         white then flashes on/off every 1s, maximum pixel exercise at peak brightness.
+ *  - ADD: GitHub link panel on dashboard — grey .card background, ♥ left-aligned,
+ *         link colour matches UI accent (#64B5F6), firmware version right-aligned.
+ *
+ * CHANGELOG v5.19 — 2026-05-07:
+ *  - IMPROVE: MQTT /status topic now publishes "awake" on connect (was "online").
+ *             "awake"/"sleeping" is a consistent semantic pair — better for HA
+ *             automations than mixing "online"/"sleeping".
+ *  - IMPROVE: publishBootSummary() ntfy title now reflects wakeup reason:
+ *             "Boot" for power-on, "Wake (timer)" for timer, "Wake (button)" for button.
+ *             Consistent emoji line added: src icon + voltage + % + wake mode.
+ *  - IMPROVE: publishSensorData() ntfy format tightened to match boot style.
+ *  - IMPROVE: powerDownPeripherals() ntfy sleep format tightened to match.
+ *  - IMPROVE: MQTT boot JSON gains "wake_mode" field ("active"/"stealth") so
+ *             HA/Node-RED can see which display mode was in effect this wake.
+ *  - NOTE:    power_src "usb" on wake is correct when USB is connected — the
+ *             blocking boot ADC read (14-sample trimmed mean) accurately reflects
+ *             actual power source. Not a bug.
+ *
+ * Features: WiFiManager portal, OTA, DHT22, MQTT (Std/AIO/Ubidots/ALL),
+ *   OLED 5-frame display, deep sleep (timer+button), JLed, ntfy.sh,
+ *   battery monitor, pre-sleep power shutdown, CPU freq control.
+ *
+ * CHANGELOG v5.15 — 2026-05-07:
+ *  - FIX: Stealth/Ghost mode OLED still lit on timer wakes.
+ *         Root causes: (a) loadDeepSleepConfig() read "wake_disp" from NVS AFTER
+ *         preferences.end() — always returned default (Active). Fixed by moving
+ *         the getUChar() call inside the begin/end block. (b) goToDeepSleep()
+ *         called drawSleepOverlay() which sends display.display(), turning the
+ *         panel back on in stealth mode. Guarded with stealthThisWake check —
+ *         countdown skipped silently when stealth is active.
+ *         (c) setupWiFiManager() blink guard already present via stealthThisWake;
+ *         confirmed correct.
+ *  - FIX: Device not sleeping within 45s window.
+ *         readSensor() DHT failure path returned early without setting
+ *         triggerDeepSleepAfterPublish=true, leaving the sleep trigger unset.
+ *         Flag is now always set after readSensor() regardless of DHT success.
+ *         (Already partially fixed in v5.13; confirmed and hardened here.)
+ *  - FIX: HTML malformed in /settings Deep Sleep section.
+ *         Wake display mode radio block was missing the closing </div> for the
+ *         <div class='sec'> before the ntfy section, causing browser to misparse
+ *         the form layout. Restructured the string chain with clean open/close.
+ *  - FIX: wakeDisplayMode NVS key "wake_disp" consolidated into "deep" namespace
+ *         (matches saveDeepConfig). Removed the separate duplicate getUChar() call
+ *         that was outside the preferences begin/end block.
+ *  - RENAME: "Active" / "Stealth" are the canonical mode names (was "Pulse"/"Ghost"
+ *         in some intermediate versions). All HTML, Serial, and comments now
+ *         consistently use Active / Stealth.
+ *
+ * CHANGELOG v5.13 — 2026-05-04:
+ *  - ADD: Wake Display Mode — two presets stored in NVS ("deep"/"wake_disp"):
+ *           Active (1, default) — OLED on + LED breathing during wake window.
+ *           Stealth (0)         — OLED off + LED off; silent eco operation.
+ *         Button-triggered wakes always use Active so the user gets feedback.
+ *  - ADD: stealthThisWake flag — computed once in setup() from wakeDisplayMode
+ *         and wakeupCause; propagates through WiFi connect, LED, and loop().
+ *  - ADD: Wake mode shown on dashboard Deep Sleep card.
+ *  - ADD: Wake mode radio buttons in /settings Deep Sleep section.
+ *  - FIX: readSensor() failure path now always sets triggerDeepSleepAfterPublish
+ *         so a DHT read failure no longer prevents the device from sleeping.
+ *
+
+ * CHANGELOG v5.10 — 2026-05-04:
+ *  - FIX: isBatFloating variance threshold raised 5->25 mV (runtime) and 8->25 mV (boot).
+ *         A full, stable LiPo at float charge (~3.9V) has near-zero ADC variance and was
+ *         being incorrectly flagged as "no battery detected". Only a truly floating pin
+ *         (USB-only, no cell) produces spread consistently below 25 mV.
+ *  - FIX: voltsToPercent() dead-code duplicate `if (v >= 4.00f)` block removed.
+ *         The second identical branch was unreachable and confused future maintenance.
+ *  - FIX: Deep Sleep settings page — "Wake interval (minutes)" input rendered value=''
+ *         because deepSleepMinutes was never concatenated. Now shows saved value.
+ *  - FIX: CPU MHz dropdown non-selected <option> tags were missing closing '>',
+ *         producing malformed HTML. Browser fell back to showing only 240 MHz.
+ *  - CHANGE: Default publish interval changed 60s -> 600s (10 min) to match
+ *         typical deep-sleep interval and reduce traffic when freshly provisioned.
+ *  - CHANGE: Boot# reset button moved from dashboard to Settings page.
+ *         Dashboard is cleaner; Settings page is the right home for maintenance actions.
+ *  - CHANGE: Default vdiv calibrate: behaviour unchanged; NVS default for pub_sec is 600.
+ *
+ *  - FIX: OLED never showed any content after config settings were saved.
+ *         powerUpPeripherals() was missing display.init() + display.displayOn()
+ *         + display.clear() after Vext was restored. Fixed.
+ *  - FIX: drawFrame5 (battery screen) redesigned — no overlapping text/gfx.
+ *         Battery-only: source+voltage, charge%, full-width bar, warning note.
+ *         ntfy info removed from this frame.
+ *  - ADD: OLED sleep-countdown overlay (3..2..1) shown in goToDeepSleep()
+ *         before powerDownPeripherals(). drawSleepOverlay() helper styled
+ *         consistently with the existing drawHoldOverlay().
+ *  - ADD: ntfy verbosity control — four independent NVS-persisted flags:
+ *           ntfy_on_batt    — low/critical battery (default ON; fires even
+ *                             when ntfy_on_publish is OFF)
+ *           ntfy_on_boot    — boot/wake summary (default ON)
+ *           ntfy_on_sleep   — going-to-sleep notification (default OFF)
+ *           ntfy_on_publish — every periodic publish (default OFF)
+ *         Web settings updated with labelled checkboxes + explanations.
+ *         Dashboard ntfy card shows which alert types are active.
+ *  - ADD: publishBatteryStatus(level) — broadcasts low/critical/ok to all
+ *         configured MQTT brokers, independent of ntfy:
+ *           Std:  <topic>/status = "battery_low"|"battery_critical"
+ *                 <topic>/battery = JSON with est_sleeps field
+ *           AIO:  <user>/feeds/battery-status = "low"|"critical"|"ok"
+ *           Ubi:  battery_status = 0(ok)|1(low)|2(critical)
+ *         Recovery "ok" publish fires when battery rises above warn+5%.
+ *  - ADD: batt_status field in all MQTT sensor + boot payloads.
+ *  - ADD: estSleepsRemaining() — rough cycle estimate shown in ntfy messages
+ *         for low-battery, critical, boot, and sleep notifications.
+ *
+ *  - FIX: All web handler h+= lines had a stray extra ) left over from the
+ *         v5.6 streaming refactor. /settings, /wifi, /calibrate also missing
+ *         String h = pageHead(...) capture. All corrected.
+ *  - FIX: BAT_USB_THRESHOLD lowered 4.15->4.05V. USB rail on this hardware
+ *         reads 4.10-4.12V, well below the old 4.15V cutoff — USB was never
+ *         detected. 4.05V sits cleanly between USB floor and battery max.
+ *  - FIX: Boot battery read added 50ms ADC settling delay, 500µs inter-sample
+ *         spacing, and drops min+max outliers (14-sample trimmed mean) to
+ *         prevent boot ADC spikes falsely triggering isUSBPowered.
+ *  - FIX: voltsToPercent() learnedVFull tolerance tightened 0.02->0.01V —
+ *         prevents falsely reporting 100% when battery is e.g. 3.78V but
+ *         learnedVFull drifted down to 3.79V from a marginal ADC reading.
+ *  - FIX: publishBootSummary() "version" field was hardcoded "5.3". Now uses
+ *         FW_VERSION define — always matches sketch version automatically.
+ *  - CONSISTENCY: All outputs (MQTT std/AIO/Ubidots, ntfy, HTML) now use the
+ *         same batteryVoltFloat/batteryPercentage/isUSBPowered variables.
+ *         ntfy boot message now includes power_src and firmware version.
+ *         ntfy sensor message now includes power_src on its own line.
+ *         ntfy sleeping notification added — mirrors MQTT /status "sleeping".
+ *  - OPT: bootCount NVS write-on-every-boot replaced with RTC+NVS hybrid.
+ *         Sleep wakes (timer/button) increment RTC_DATA_ATTR rtcBootOffset only
+ *         — zero flash writes. Power-on/crash writes NVS (the event that matters).
+ *         bootCount displayed = nvsBase + rtcBootOffset, fully continuous.
+ *         MQTT boot payload gains "sleep_wakes" field (RTC offset since last
+ *         power-on) so the split is visible in your broker if needed.
+ *  - FIX: WiFiManager portal OLED frame only showed during double-reset forced
+ *         portal, not during first-time autoConnect() portal. Fixed by using
+ *         wm.setAPCallback() which fires the moment the AP opens in both paths.
+ *         portalActive flag and frame4 switch now happen reliably every time.
+ *  - IMPROVE: drawFrame4 (portal screen) redesigned with numbered steps matching
+ *         the style of other OLED frames: "1. Join ESP32-Setup / 2. Open 192.168.4.1"
+ *  - ADD: /reset_bootcount web route + dashboard button (Boot#) with confirm
+ *         dialog. Resets NVS base and rtcBootOffset to 1 without device restart.
+ *
+ * CHANGELOG v5.7:
+ *  - FIX: Web UI slow "typing" effect — CONTENT_LENGTH_UNKNOWN forced HTTP
+ *         chunked transfer; browser rendered each small fragment individually.
+ *         pageHead()/pageFoot() now return Strings, all handlers buffer into
+ *         String h and call sendPage(h) — single response, instant render.
+ *  - FIX: Battery % on USB showed 95% (4.2V fell below learnedVFull-0.02).
+ *         voltsToPercent() now returns 100% immediately when isUSBPowered.
+ *  - FIX: learnedVFull default changed 4.12->4.00V (this battery max ~3.9-4.0V).
+ *  - FIX: BAT_USB_THRESHOLD raised 4.05->4.15V — clearer USB vs battery gap.
+ *  - KEEP: All settings sections (AIO/Ubidots/ntfy/DeepSleep/PowerSave) intact.
+ *
+ * CHANGELOG v5.6 — 2026-05-01:
+ *  - OPT: All large HTML pages converted to streaming sendContent() calls —
+ *         eliminates ~20KB of runtime String heap allocations.
+ *  - OPT: Shared COMMON_CSS[] in PROGMEM — one CSS block used by all pages
+ *         instead of repeating ~1KB of CSS in each page String.
+ *  - OPT: OTA_HTML[] already PROGMEM — kept as-is.
+ *  - OPT: F() macro applied to all Serial.print/println string literals —
+ *         moves debug strings from RAM to flash (~1KB recovered).
+ *  - OPT: pageHead()/pageFoot() helpers stream common boilerplate from flash.
+ *  - NO functionality changes — all web pages, MQTT, deep sleep, battery,
+ *         ntfy, OTA, button, OLED, power-save features identical to v5.5.
+ *
+ * CHANGELOG v5.5 — 2026-04-29:
+ *  - ADD: actionPage() helper — shared animated response page used by all
+ *         action endpoints. Shows icon, message, 6px shrink countdown bar,
+ *         auto-redirects to dashboard, plus immediate "Back now" button.
+ *  - FIX: /save_settings — was bare meta-refresh with no feedback. Now shows
+ *         "Settings Saved" with 4s countdown back to dashboard.
+ *  - FIX: /reset — now shows "Restarting" with 3s countdown bar.
+ *  - FIX: /reset_wifi — now shows instructions to connect to ESP32-Setup AP.
+ *  - FIX: /calibrate — form is now properly styled matching rest of UI.
+ *         On successful calibration shows "Calibration Saved" with new factor
+ *         value and 5s countdown. Back button on form page.
+ *
+ * CHANGELOG v5.4 — 2026-04-29:
+ *  - FIX: Battery reads wrong voltage (showed 3.70V vs real 3.92V).
+ *         Switched from raw analogRead() to analogReadMilliVolts() which
+ *         uses ESP32 eFuse ADC calibration — accurate across full range.
+ *         Conversion: v = (avg_amv/1000) * vdivFactor (default 2.68).
+ *  - ADD: vdivFactor runtime variable loaded from NVS ("battery"/"vdiv").
+ *         Factory default 2.68 (calibrated: 3.92V real / 1463mV AMV).
+ *  - ADD: /calibrate web endpoint — enter multimeter reading, board
+ *         computes and saves correct vdivFactor to NVS automatically.
+ *         Link shown next to voltage on dashboard.
+ *  - FIX: Boot battery read used wrong formula after analogRead->AMV switch.
+ *         Also loads vdivFactor from NVS at boot for consistency.
+ *  - FIX: voltsToPercent() top reference uses learnedVFull (adaptive)
+ *         instead of hardcoded 4.20V for more accurate % on this battery.
+ *  - TRIM: 16 samples + 100μs settle replaces 64 bare samples —
+ *         same noise reduction, ADC cap settles properly between reads.
+ *
+ * CHANGELOG v5.2 — 2026-04-28:
+ *
+ *
+ *
+ *  - ADD: learnedVFull — adaptive full-voltage tracking with NVS persistence
+ *         ("battery" namespace, key "vFull"). Auto-updates when a higher voltage
+ *         is seen; used as the upper reference for voltsToPercent().
+ *  - ADD: USB/charging hysteresis via lastHighVoltageTime: isUSBPowered stays
+ *         true for 15 s after voltage drops below BAT_USB_THRESHOLD, preventing
+ *         display/alert flicker when the charger briefly throttles back.
+ *  - TRIM: Removed verbose inline comments to recover flash headroom.
+ *
+ * Required Libraries: WiFiManager (tzapu), PubSubClient, DHT + Adafruit Sensor,
+ *   ArduinoJson v7, OneButton, JLed, HTTPClient (built-in), Heltec board package.
  */
 
 
@@ -106,7 +458,7 @@
 //   USB detection: ADC only ever sees VBAT. Charging raises it above ~4.05V.
 //   USB-only / no battery = ADC floats; caught by variance check (isBatFloating).
 // ─────────────────────────────────────────────────────────────────────────────
-#define FW_VERSION            "5.25"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.26"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -198,6 +550,9 @@ float learnedVFull    = 3.92f;  // battery-only max for this pack, adaptive
 float vdivFactor      = VDIV_FACTOR_DEFAULT;  // USB / floating calibration factor — loaded from NVS "battery"/"vdiv"
 float vdivFactorBat   = VDIV_FACTOR_DEFAULT;  // battery-only calibration factor  — loaded from NVS "battery"/"vdiv_bat"
                                                // Falls back to vdivFactor if never calibrated in battery mode.
+float lastRawAvgMv    = 0.0f;  // raw ADC mV from last battery_read() or boot read
+                                // used by /calibrate to avoid back-calc race when
+                                // mode may change between read and form submit
 bool  batteryWarnSent    = false;
 
 // Sensor threshold alerts
@@ -699,6 +1054,7 @@ void battery_read() {
   }
   float avg_mv  = (float)sum / 16.0f;
   uint16_t vvar = mx - mn;
+  lastRawAvgMv  = avg_mv;  // stash for /calibrate race-free back-calc
 
   // ── Two-pass source + calibration factor selection ────────────────────────
   // Pass 1: quick estimate using vdivFactor (USB-calibrated) to determine source.
@@ -3398,100 +3754,166 @@ void setupOTA() {
     String rv = server.arg("v");
 
     // ── SAVE: real voltage supplied ─────────────────────────────────────────
-    if (rv.length() > 0 && batteryVoltFloat > 100) {
+    if (rv.length() > 0) {
+      // Guard: battery must have been read at least once
+      if (lastRawAvgMv < 1.0f) {
+        String h = pageHead(F("Calibrate Battery"));
+        h += F("<h1>&#x1F3AF; Battery Calibration</h1>"
+          "<div class='card' style='border-left:4px solid #ef5350'>"
+          "<h2 style='color:#ef5350'>&#x26A0; Reading not ready</h2>"
+          "<p>The ADC has not completed a battery read yet. "
+          "Wait a few seconds after boot, then try again.</p>"
+          "<a href='/calibrate' style='color:#64B5F6'>&#x21BA; Retry</a>"
+          "</div>");
+        sendPage(h + pageFoot());
+        return;
+      }
       float realV = rv.toFloat();
       if (realV > 3.0f && realV < 5.5f) {
         // Decide which NVS key to write based on CURRENT detected source.
         // USB/floating → high-voltage (USB) path → "vdiv"
         // Battery only → battery-only path         → "vdiv_bat"
         bool calOnBattery = (!isUSBPowered && !isBatFloating);
-        float activeFactor = calOnBattery ? vdivFactorBat : vdivFactor;
-        // Back-calculate raw ADC mV from current reading then derive new factor
-        float amv = (batteryVoltFloat / 1000.0f) / activeFactor * 1000.0f;
-        float newFactor = realV / (amv / 1000.0f);
+        // Use raw ADC mV stored at last battery_read() — avoids race where
+        // batteryVoltFloat was produced by a different factor if mode changed.
+        float newFactor = realV / (lastRawAvgMv / 1000.0f);
         preferences.begin("battery", false);
         if (calOnBattery) {
           vdivFactorBat = newFactor;
           preferences.putFloat("vdiv_bat", vdivFactorBat);
+          // Only reset learnedVFull in battery mode — USB cal must not corrupt it
+          preferences.putFloat("vFull", 3.92f);
+          learnedVFull = 3.92f;
           Serial.printf("[CAL] Battery factor: vdivFactorBat=%.4f\n", vdivFactorBat);
         } else {
           vdivFactor = newFactor;
           preferences.putFloat("vdiv", vdivFactor);
+          // learnedVFull intentionally NOT reset here — USB cal must not corrupt it
           Serial.printf("[CAL] USB factor: vdivFactor=%.4f\n", vdivFactor);
         }
-        preferences.putFloat("vFull", 3.92f);
         preferences.end();
-        learnedVFull = 3.92f;
         String savedMode = calOnBattery ? "Battery-only factor" : "USB / charging factor";
-        String nextStep  = calOnBattery
-          ? "USB calibration: plug in USB, revisit this page."
-          : "Battery calibration: unplug USB, run on battery, revisit this page.";
+        String nextMode  = calOnBattery ? "USB" : "battery-only";
+        String nextInstr = calOnBattery
+          ? "Plug in USB, revisit /calibrate."
+          : "Unplug USB, run on battery only, revisit /calibrate.";
+        // Redirect to /calibrate so the user lands on step 2 immediately
         server.send(200, F("text/html"),
           actionPage("&#x1F3AF;", "Calibration Saved",
-            savedMode + ": " + String(newFactor, 4) +
-            "  Reads: " + String(realV, 3) + "V"
-            "<br><span style='font-size:12px;color:#9e9e9e'>Next: " + nextStep + "</span>", 6));
+            savedMode + ": <strong>" + String(newFactor, 4) + "</strong>"
+            " &nbsp;&rarr;&nbsp; reads " + String(realV, 3) + "V"
+            "<br><span style='font-size:13px;color:#9e9e9e'>Next: " + nextInstr +
+            "</span><br><a href='/calibrate' style='color:#64B5F6;font-size:13px'>"
+            "&#x21B3; Calibrate " + nextMode + " now</a>",
+            6, "/calibrate"));
         return;
       }
+      // Voltage out of range — show error
+      String h = pageHead(F("Calibrate Battery"));
+      h += F("<h1>&#x1F3AF; Battery Calibration</h1>"
+        "<div class='card' style='border-left:4px solid #ef5350'>"
+        "<h2 style='color:#ef5350'>&#x26A0; Invalid voltage</h2>"
+        "<p>Value must be between 3.000 V and 5.500 V. "
+        "Check your multimeter reading and try again.</p>"
+        "<a href='/calibrate' style='color:#64B5F6'>&#x2190; Back</a>"
+        "</div>");
+      sendPage(h + pageFoot());
+      return;
     }
 
     // ── DISPLAY form ────────────────────────────────────────────────────────
     float curV = batteryVoltFloat / 1000.0f;
     bool onBattery = (!isUSBPowered && !isBatFloating);
-    bool batCalSet = (fabsf(vdivFactorBat - vdivFactor) > 0.0001f);
+    // "calibrated" = factor has been explicitly saved (differs from compile-time default)
+    bool usbCalDone = (fabsf(vdivFactor    - VDIV_FACTOR_DEFAULT) > 0.0001f);
+    bool batCalDone = (fabsf(vdivFactorBat - VDIV_FACTOR_DEFAULT) > 0.0001f)
+                   || (fabsf(vdivFactorBat - vdivFactor)           > 0.0001f);
 
     String h = pageHead(F("Calibrate Battery"));
     h += F("<h1>&#x1F3AF; Battery Calibration</h1>");
 
     // Current mode banner
     h += F("<div class='card' style='border-left:4px solid ");
-    h += onBattery ? F("#ffa726'><h2>&#x1F50B; Battery-only mode</h2>") : F("#66bb6a'><h2>&#x26A1; USB / Charging mode</h2>");
-    h += F("<p>ESP32 reads: <strong>");
-    h += String(curV, 3);
-    h += F("V</strong> &nbsp;Active factor: <strong>");
-    h += String(onBattery ? vdivFactorBat : vdivFactor, 4);
-    h += F("</strong></p></div>");
+    if (isBatFloating)
+      h += F("#546e7a'><h2>&#x26A0; USB-only / no battery</h2>"
+             "<p style='color:#9e9e9e'>No battery cell detected. "
+             "There is nothing to calibrate for this state — connect a battery.</p>");
+    else if (onBattery)
+      h += F("#ffa726'><h2>&#x1F50B; Battery-only mode</h2>");
+    else
+      h += F("#66bb6a'><h2>&#x26A1; USB / Charging mode</h2>");
+    if (!isBatFloating) {
+      h += F("<p>ESP32 reads: <strong>");
+      h += String(curV, 3);
+      h += F("V</strong> &nbsp;Active factor: <strong>");
+      h += String(onBattery ? vdivFactorBat : vdivFactor, 4);
+      h += F("</strong></p>");
+    }
+    h += F("</div>");
 
-    // Both factors table
-    h += F("<div class='card'><h2>Stored Calibration Factors</h2>"
+    // Step progress table
+    h += F("<div class='card'><h2>Calibration Progress</h2>"
       "<table style='width:100%;border-collapse:collapse;font-size:14px'>"
-      "<tr style='color:#9e9e9e'><td style='padding:6px 4px'>Mode</td>"
-      "<td style='padding:6px 4px'>Factor</td><td style='padding:6px 4px'>NVS key</td></tr>"
+      "<tr style='color:#9e9e9e'>"
+      "<td style='padding:6px 4px'>Step</td>"
+      "<td style='padding:6px 4px'>Mode</td>"
+      "<td style='padding:6px 4px'>Factor (NVS)</td>"
+      "<td style='padding:6px 4px'>Status</td></tr>"
       "<tr style='border-top:1px solid #333'>"
+      "<td style='padding:6px 4px;font-weight:700'>1</td>"
       "<td style='padding:6px 4px'>&#x26A1; USB / Charging</td>"
       "<td style='padding:6px 4px;font-family:monospace'>");
     h += String(vdivFactor, 4);
-    h += F("</td><td style='padding:6px 4px;font-size:11px;color:#546e7a'>battery/vdiv</td></tr>"
+    h += F("</td><td style='padding:6px 4px'>");
+    h += usbCalDone
+      ? F("<span style='color:#66bb6a'>&#x2705; calibrated</span>")
+      : F("<span style='color:#9e9e9e'>&#x23F3; not yet set</span>");
+    h += F("</td></tr>"
       "<tr style='border-top:1px solid #333'>"
+      "<td style='padding:6px 4px;font-weight:700'>2</td>"
       "<td style='padding:6px 4px'>&#x1F50B; Battery only</td>"
       "<td style='padding:6px 4px;font-family:monospace'>");
     h += String(vdivFactorBat, 4);
-    h += F("</td><td style='padding:6px 4px;font-size:11px;color:");
-    h += batCalSet ? F("#66bb6a'>&#x2714; set") : F("#ffa726'>&#x26A0; using USB factor");
+    h += F("</td><td style='padding:6px 4px'>");
+    h += batCalDone
+      ? F("<span style='color:#66bb6a'>&#x2705; calibrated</span>")
+      : F("<span style='color:#ffa726'>&#x23F3; using USB factor</span>");
     h += F("</td></tr></table></div>");
 
     // How-to
-    h += F("<div class='info'><strong>Two-pass calibration — do both for accuracy:</strong>"
+    h += F("<div class='info'><strong>Two-step calibration — do both for accuracy:</strong>"
       "<ol style='padding-left:18px;margin-top:8px;font-size:13px;line-height:1.7'>"
-      "<li>Plug in USB. Measure battery+ terminal to GND with multimeter. Enter below.</li>"
-      "<li>Unplug USB, run on battery. Measure again. Enter below.</li>"
-      "<li>Both factors are stored. Code auto-selects the right one each reading.</li>"
+      "<li><strong>Step 1 (USB):</strong> Plug in USB. Measure battery+ terminal "
+      "to GND with a multimeter. Enter the reading below and save.</li>"
+      "<li><strong>Step 2 (Battery):</strong> Unplug USB, run on battery only. "
+      "Measure again. Enter the reading below and save.</li>"
+      "<li>Code auto-selects the right factor each reading. Both must be done "
+      "for full accuracy.</li>"
       "</ol></div>");
 
-    // Input form — shows which mode will be saved
-    h += F("<div class='card'><h2>Enter multimeter reading <span style='font-weight:400;color:#9e9e9e;font-size:14px'>(saves </span>");
-    h += onBattery ? F("<span style='color:#ffa726'>battery factor</span>") : F("<span style='color:#66bb6a'>USB factor</span>");
-    h += F("<span style='font-weight:400;color:#9e9e9e;font-size:14px'>)</span></h2>"
-      "<form method=GET action=/calibrate style='margin-top:8px'>"
-      "<div style='display:flex;gap:8px;align-items:center'>"
-      "<input name=v type=number step=0.001 min=3.0 max=5.5 placeholder='e.g. ");
-    h += onBattery ? F("3.770") : F("4.100");
-    h += F("' required style='max-width:160px'>"
-      "<button type=submit class='btn' style='margin:0'>&#x1F4BE; Save</button></div>"
-      "<p style='color:#9e9e9e;font-size:12px;margin-top:8px'>"
-      "Saves to NVS immediately. Affects all future readings in this mode.</p>"
-      "</form></div>"
-      "<a href='/' style='display:inline-block;margin-top:16px;color:#64B5F6'>"
+    // Input form — only show when a battery read is available and mode is known
+    if (!isBatFloating) {
+      h += F("<div class='card'><h2>Enter multimeter reading "
+        "<span style='font-weight:400;color:#9e9e9e;font-size:14px'>"
+        "(saves </span>");
+      h += onBattery
+        ? F("<span style='color:#ffa726'>battery factor &#x2014; step 2</span>")
+        : F("<span style='color:#66bb6a'>USB factor &#x2014; step 1</span>");
+      h += F("<span style='font-weight:400;color:#9e9e9e;font-size:14px'>)"
+        "</span></h2>"
+        "<form method=GET action=/calibrate style='margin-top:8px'>"
+        "<div style='display:flex;gap:8px;align-items:center'>"
+        "<input name=v type=number step=0.001 min=3.0 max=5.5 placeholder='e.g. ");
+      h += onBattery ? F("3.770") : F("4.100");
+      h += F("' required style='max-width:160px'>"
+        "<button type=submit class='btn' style='margin:0'>&#x1F4BE; Save</button>"
+        "</div>"
+        "<p style='color:#9e9e9e;font-size:12px;margin-top:8px'>"
+        "Measure NOW while the device is in this mode. "
+        "Saves to NVS immediately. Affects all future readings in this mode.</p>"
+        "</form></div>");
+    }
+    h += F("<a href='/' style='display:inline-block;margin-top:16px;color:#64B5F6'>"
       "&#x2190; Dashboard</a>");
     sendPage(h + pageFoot());
   });
@@ -3721,6 +4143,7 @@ void setup() {
     bsum -= bmn; bsum -= bmx;
     float bavg = (float)bsum / 14.0f;
     uint16_t bvar = bmx - bmn;
+    lastRawAvgMv = bavg;  // stash for /calibrate race-free back-calc
 
     // Boot battery detection — same two-pass logic as runtime battery_read() v5.25.
     // Pass 1: estimate with vdivFactor (USB-calibrated) to determine source.
