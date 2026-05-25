@@ -3,15 +3,27 @@ name: End-to-End Automated Firmware and Manifest Sync
 on:
   push:
     paths:
-      - 'firmware/manifest.json' # The automation triggers ONLY when you update this manifest file
+      - 'firmware/manifest.json' # Triggers automatically on any code push/edit
 
-# Give the workflow permission to write updates back into your repository and create releases
+  # This adds the dropdown selection menu on the GitHub web UI
+  workflow_dispatch:
+    inputs:
+      target_preset:
+        description: 'Select Build Preset Target'
+        required: true
+        default: 'GitHub-Cloud'
+        type: environment # Tells GitHub to use your Environments as the dropdown options
+
 permissions:
   contents: write
 
 jobs:
   build-sync-release:
-    runs-on: ubuntu-latest
+    # Links the run to your selected environment preset (defaults to Cloud if you just push code)
+    environment: ${{ github.event.inputs.target_preset || 'GitHub-Cloud' }}
+    
+    # Inline logic: If the preset is Local-Pi5, route to your self-hosted Pi. Otherwise, use the Cloud.
+    runs-on: ${{ (github.event.inputs.target_preset == 'Local-Pi5') && 'self-hosted' || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout Code
@@ -33,23 +45,17 @@ jobs:
 
       - name: Install System Dependencies & Custom Libraries
         run: |
-          
           mkdir -p $HOME/Arduino/libraries
-          
           
           git clone https://github.com/tzapu/WiFiManager.git $HOME/Arduino/libraries/WiFiManager
           
-          
           arduino-cli lib install "Heltec ESP32 Dev-Boards"
-          
-          
           arduino-cli lib install "PubSubClient"
           arduino-cli lib install "DHT sensor library"
           arduino-cli lib install "Adafruit Unified Sensor"
           arduino-cli lib install "ArduinoJson"
           arduino-cli lib install "OneButton"
           arduino-cli lib install "JLed"
-          
 
       - name: Compile Heltec V2 Binary
         run: |
