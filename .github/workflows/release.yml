@@ -46,8 +46,17 @@ jobs:
       - name: Install System Dependencies & Custom Libraries
         run: |
           mkdir -p $HOME/Arduino/libraries
+
           
-          git clone https://github.com/tzapu/WiFiManager.git $HOME/Arduino/libraries/WiFiManager
+          if [ -d "$HOME/Arduino/libraries/WiFiManager" ]; then
+            echo "WiFiManager already exists. Updating via git pull..."
+            cd $HOME/Arduino/libraries/WiFiManager && git pull
+          else
+            echo "Cloning WiFiManager fresh..."
+            git clone https://github.com/tzapu/WiFiManager.git $HOME/Arduino/libraries/WiFiManager
+          fi
+          
+          
           
           arduino-cli lib install "Heltec ESP32 Dev-Boards"
           arduino-cli lib install "PubSubClient"
