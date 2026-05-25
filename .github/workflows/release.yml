@@ -3,80 +3,40 @@ name: End-to-End Automated Firmware and Manifest Sync
 on:
   push:
     paths:
-      - 'firmware/manifest.json'  # Triggers automatically when you push a manifest update
-  workflow_dispatch:              # Allows manual triggers with a choice selection layout
+      - 'firmware/manifest.json' # The automation triggers ONLY when you update this manifest file
+
+  # This adds the manual "Run workflow" dropdown menu on your GitHub Actions web page
+  workflow_dispatch:
     inputs:
       runner_selection:
-        description: 'Choose Execution Environment'
+        description: 'Where should this build run?'
         required: true
-        default: 'auto-detect'
+        default: 'ubuntu-latest'
         type: choice
         options:
-          - 'auto-detect'
-          - 'force-local-pi5'
-          - 'force-github-cloud'
+          - 'ubuntu-latest'
+          - 'self-hosted'
 
+# Give the workflow permission to write updates back into your repository and create releases
 permissions:
   contents: write
 
 jobs:
-  # STEP 1: Smart Routing Engine (Determines if the Pi is alive)
-  determine-runner:
-    runs-on: ubuntu-latest
-    outputs:
-      target_runner: ${{ steps.decide.outputs.final_choice }}
-    steps:
-      - name: Evaluate Network Status & User Choice
-        id: decide
-        env:
-          CHOICE: ${{ github.event.inputs.runner_selection || 'auto-detect' }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "User Selection Mode: $CHOICE"
-          
-          if [ "$CHOICE" = "force-github-cloud" ]; then
-            echo "Forcing build onto GitHub Cloud Runners."
-            echo "final_choice=ubuntu-latest" >> $GITHUB_OUTPUT
-            
-          elif [ "$CHOICE" = "force-local-pi5" ]; then
-            echo "Forcing build onto Local Self-Hosted Raspberry Pi 5."
-            echo "final_choice=self-hosted" >> $GITHUB_OUTPUT
-            
-          else
-            # AUTO-DETECT MODE: Query GitHub API to see if your Pi 5 runner is active/idle
-            echo "Auto-detect active. Checking API for available self-hosted runners..."
-            
-            RUNNER_STATUS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/runners" \
-              | python3 -c "import sys, json; data = json.load(sys.stdin); online_runners = [r for r in data.get('runners', []) if 'self-hosted' in r.get('labels', []) and r.get('status') == 'online']; print('online' if online_runners else 'offline')")
-            
-            if [ "$RUNNER_STATUS" = "online" ]; then
-              echo "🚀 Raspberry Pi 5 is ONLINE! Routing compilation locally."
-              echo "final_choice=self-hosted" >> $GITHUB_OUTPUT
-            else
-              echo "⚠️ Raspberry Pi 5 is OFFLINE or unreachable. Falling back to GitHub Cloud Servers."
-              echo "final_choice=ubuntu-latest" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-  # STEP 2: Main Compilation, Sync, and Release Job
   build-sync-release:
-    needs: determine-runner
-    # FIXED: Wrapped inside the expression context brackets so the compiler reads the evaluated output string!
-    runs-on: ${{ needs.determine-runner.outputs.target_runner }}
+    # If triggered manually, use your dropdown selection. If triggered by a normal push, default to the cloud runner.
+    runs-on: ${{ github.event.inputs.runner_selection || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # Ensures proper history tracking for committing updates back
 
-      # System Pre-Check: Safely configures the CLI compiler engine on both environments natively
-      - name: System Pre-Check & Setup Arduino CLI
+      # Fallback fix: Ensures setup works flawlessly whether on Cloud or a local ARM64 Pi OS environment
+      - name: Setup Arduino CLI
         run: |
           if ! command -v arduino-cli &> /dev/null; then
-            echo "arduino-cli not found. Installing system binary toolchain..."
+            echo "arduino-cli not found. Installing native binary toolchain..."
             curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
             echo "$HOME/bin" >> $GITHUB_PATH
             export PATH="$PATH:$HOME/bin"
@@ -87,14 +47,12 @@ jobs:
           arduino-cli config init --overwrite
           arduino-cli config set board_manager.additional_urls "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
           arduino-cli core update-index
-          # Only downloads the core framework files if they aren't already locally cached
           arduino-cli core list | grep "esp32:esp32" || arduino-cli core install esp32:esp32
 
       - name: Install System Dependencies & Custom Libraries
         run: |
           mkdir -p $HOME/Arduino/libraries
           
-          # Skip cloning WiFiManager if the directory already exists on your Pi's system cache
           if [ ! -d "$HOME/Arduino/libraries/WiFiManager" ]; then
             git clone https://github.com/tzapu/WiFiManager.git $HOME/Arduino/libraries/WiFiManager
           fi
@@ -111,6 +69,8 @@ jobs:
         run: |
           SKETCH_DIR=$(dirname $(find . -name "*.ino" | head -n 1))
           
+          # Target the true Heltec board, but inject custom partition overrides 
+          # to bypass the restrictive core menu validation.
           arduino-cli compile \
             --fqbn esp32:esp32:heltec_wifi_kit_32 \
             --build-property "build.partitions=partitions" \
@@ -124,20 +84,26 @@ jobs:
         run: |
           MANIFEST_PATH="firmware/manifest.json"
           
+          # 1. Parse target version from your initial manifest modification
           VERSION=$(python3 -c "import json; print(json.load(open('$MANIFEST_PATH'))['version'])")
           echo "Processing Firmware Version: $VERSION"
           
+          # 2. Grab the actual binary output and calculate its true CRC32 checksum
           TARGET_BIN=$(ls ./build/*.bin | grep -v "bootloader" | grep -v "partitions" | head -n 1)
           
+          # Calculate size in KB (bytes / 1024) rounded to 1 decimal place
           SIZE_BYTES=$(stat -c%s "$TARGET_BIN")
           SIZE_KB=$(python3 -c "print(round($SIZE_BYTES / 1024, 1))")
           
+          # Compute CRC32
           CRC32=$(python3 -c "import zlib; print(f'{zlib.crc32(open(\"$TARGET_BIN\", \"rb\").read()):08X}')")
           echo "Computed Binary CRC32: $CRC32"
           
+          # 3. Format the exact expected binary asset name matching your scheme
           NEW_NAME="heltec_wifkit32v2_v${VERSION//./}_${CRC32}_firmware.ino.bin"
           mv "$TARGET_BIN" "./build/$NEW_NAME"
           
+          # 4. Use Python to inject metrics safely into manifest.json by passing variables from the environment context
           export D_VERSION="$VERSION"
           export D_NAME="$NEW_NAME"
           export D_SIZE="$SIZE_KB"
@@ -151,6 +117,7 @@ jobs:
           with open('$MANIFEST_PATH', 'r') as f:
               data = json.load(f)
           
+          # Injecting/updating the production parameters safely from the environment map
           data['build_date'] = datetime.now(timezone.utc).strftime('%Y-%m-%d')
           data['binary'] = f'https://github.com/' + os.environ['GITHUB_REPO'] + f'/releases/download/v' + os.environ['D_VERSION'] + '/' + os.environ['D_NAME']
           data['size'] = float(os.environ['D_SIZE'])
@@ -160,6 +127,7 @@ jobs:
               json.dump(data, f, indent=2)
           "
           
+          # 5. Export values to environment steps
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "filename=$NEW_NAME" >> $GITHUB_OUTPUT
 
@@ -169,6 +137,7 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
           git add firmware/manifest.json
+          # Only commit if changes exist to prevent empty run loops
           git diff-index --quiet HEAD || git commit -m "chore: automated manifest update for v${{ steps.process_artifacts.outputs.version }} [skip ci]"
           git push origin main
 
