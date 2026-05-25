@@ -32,19 +32,18 @@ jobs:
         with:
           fetch-depth: 0 # Ensures proper history tracking for committing updates back
 
-      # STEP A: Safely downloads the compiler if it's missing on the target host machine
+      # STEP A: Force the installation into a predictable, standard folder path (/usr/local/bin)
+      # This folder is already on the system $PATH for both Ubuntu cloud and your Pi 5!
       - name: System Pre-Check & Install Arduino CLI
         run: |
           if ! command -v arduino-cli &> /dev/null; then
-            echo "arduino-cli not found. Installing native binary toolchain..."
-            curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
-            # Expose the download folder to the rest of the workflow
-            echo "$HOME/bin" >> $GITHUB_PATH
+            echo "arduino-cli not found. Installing system binary toolchain..."
+            # Using sudo and -b ensures it lands exactly where the system can see it instantly
+            curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sudo sh -s -- -b /usr/local/bin
           else
             echo "arduino-cli already present on host environment."
           fi
 
-      # STEP B: Splitting this into its own step forces GitHub to update its environment paths cleanly!
       - name: Initialize Arduino Configuration Engine
         run: |
           arduino-cli config init --overwrite
