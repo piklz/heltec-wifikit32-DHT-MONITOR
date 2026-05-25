@@ -73,7 +73,7 @@ except Exception:
   # STEP 2: Main Compilation, Sync, and Release Job
   build-sync-release:
     needs: determine-runner
-    # FIXED: Properly wrapped inside expression brackets to pass syntax checks!
+    # FIXED: Wrapped inside the expression context brackets so the compiler reads the evaluated output string!
     runs-on: ${{ needs.determine-runner.outputs.target_runner }}
 
     steps:
