@@ -5,26 +5,13 @@ on:
     paths:
       - 'firmware/manifest.json' # The automation triggers ONLY when you update this manifest file
 
-  # This adds the manual "Run workflow" dropdown menu on your GitHub Actions web page
-  workflow_dispatch:
-    inputs:
-      runner_selection:
-        description: 'Where should this build run?'
-        required: true
-        default: 'ubuntu-latest'
-        type: choice
-        options:
-          - 'ubuntu-latest'
-          - 'self-hosted'
-
 # Give the workflow permission to write updates back into your repository and create releases
 permissions:
   contents: write
 
 jobs:
   build-sync-release:
-    # If triggered manually, use your dropdown selection. If triggered by a normal push, default to the cloud runner.
-    runs-on: ${{ github.event.inputs.runner_selection || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
@@ -32,44 +19,37 @@ jobs:
         with:
           fetch-depth: 0 # Ensures proper history tracking for committing updates back
 
-      # STEP A: Force the installation into a predictable, standard folder path (/usr/local/bin)
-      # This folder is already on the system $PATH for both Ubuntu cloud and your Pi 5!
-      - name: System Pre-Check & Install Arduino CLI
-        run: |
-          if ! command -v arduino-cli &> /dev/null; then
-            echo "arduino-cli not found. Installing system binary toolchain..."
-            # Using sudo and -b ensures it lands exactly where the system can see it instantly
-            curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sudo sh -s -- -b /usr/local/bin
-          else
-            echo "arduino-cli already present on host environment."
-          fi
-
-      - name: Initialize Arduino Configuration Engine
-        run: |
-          arduino-cli config init --overwrite
-          arduino-cli config set board_manager.additional_urls "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
-          arduino-cli core update-index
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+        with:
+          version: "1.x"
 
       - name: Install ESP32 Core Package
         run: |
-          # Only downloads the core framework files if they aren't already locally cached
-          arduino-cli core list | grep "esp32:esp32" || arduino-cli core install esp32:esp32
+          arduino-cli config init
+          arduino-cli config set board_manager.additional_urls "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
 
       - name: Install System Dependencies & Custom Libraries
         run: |
+          
           mkdir -p $HOME/Arduino/libraries
           
-          if [ ! -d "$HOME/Arduino/libraries/WiFiManager" ]; then
-            git clone https://github.com/tzapu/WiFiManager.git $HOME/Arduino/libraries/WiFiManager
-          fi
+          
+          git clone https://github.com/tzapu/WiFiManager.git $HOME/Arduino/libraries/WiFiManager
+          
           
           arduino-cli lib install "Heltec ESP32 Dev-Boards"
+          
+          
           arduino-cli lib install "PubSubClient"
           arduino-cli lib install "DHT sensor library"
           arduino-cli lib install "Adafruit Unified Sensor"
           arduino-cli lib install "ArduinoJson"
           arduino-cli lib install "OneButton"
           arduino-cli lib install "JLed"
+          
 
       - name: Compile Heltec V2 Binary
         run: |
