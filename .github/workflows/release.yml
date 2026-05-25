@@ -32,21 +32,28 @@ jobs:
         with:
           fetch-depth: 0 # Ensures proper history tracking for committing updates back
 
-      # Fallback fix: Ensures setup works flawlessly whether on Cloud or a local ARM64 Pi OS environment
-      - name: Setup Arduino CLI
+      # STEP A: Safely downloads the compiler if it's missing on the target host machine
+      - name: System Pre-Check & Install Arduino CLI
         run: |
           if ! command -v arduino-cli &> /dev/null; then
             echo "arduino-cli not found. Installing native binary toolchain..."
             curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+            # Expose the download folder to the rest of the workflow
             echo "$HOME/bin" >> $GITHUB_PATH
-            export PATH="$PATH:$HOME/bin"
+          else
+            echo "arduino-cli already present on host environment."
           fi
 
-      - name: Install ESP32 Core Package
+      # STEP B: Splitting this into its own step forces GitHub to update its environment paths cleanly!
+      - name: Initialize Arduino Configuration Engine
         run: |
           arduino-cli config init --overwrite
           arduino-cli config set board_manager.additional_urls "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
           arduino-cli core update-index
+
+      - name: Install ESP32 Core Package
+        run: |
+          # Only downloads the core framework files if they aren't already locally cached
           arduino-cli core list | grep "esp32:esp32" || arduino-cli core install esp32:esp32
 
       - name: Install System Dependencies & Custom Libraries
