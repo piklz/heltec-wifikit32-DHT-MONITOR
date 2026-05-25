@@ -2,7 +2,7 @@
   "version": "5.26",
   "build_date": "2026-05-22",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.25/heltec_wifkit32v2_v525_FABE4117_firmware.ino.bin",
-  "size": 0000.0,
+  "size": 0.0,
   "crc32": "FABE4117",
   "changelog": "calibrate success page now redirects to /calibrate calibration tweaked overall"
 }
