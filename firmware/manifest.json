@@ -1,8 +1,8 @@
 {
   "version": "5.25",
   "build_date": "2026-05-25",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.25/heltec_wifkit32v2_v525_670B3AE4_firmware.ino.bin",
-  "size": 1389.4,
-  "crc32": "670B3AE4",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.25/heltec_wifkit32v2_v525_9DAEF86E_firmware.ino.bin",
+  "size": 1389.3,
+  "crc32": "9DAEF86E",
   "changelog": "calibrate button fixed text missing , calibration tweaked overall"
 }
