@@ -73,7 +73,7 @@ except Exception:
   # STEP 2: Main Compilation, Sync, and Release Job
   build-sync-release:
     needs: determine-runner
-    # Dynamically injects the output string ('self-hosted' or 'ubuntu-latest') from the previous step!
+    # FIXED: Properly wrapped inside expression brackets to pass syntax checks!
     runs-on: ${{ needs.determine-runner.outputs.target_runner }}
 
     steps:
