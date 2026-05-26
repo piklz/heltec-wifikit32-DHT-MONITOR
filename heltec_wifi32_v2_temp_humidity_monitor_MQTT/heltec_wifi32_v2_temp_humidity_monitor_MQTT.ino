@@ -3925,7 +3925,9 @@ void setupOTA() {
       "&#x2190; Dashboard</a>");
     sendPage(h + pageFoot());
   });
-
+  
+  static const char* collectHdrs[] = {"Content-Length"};
+  server.collectHeaders(collectHdrs, 1);
   server.begin();
   Serial.println(F("[Web] Server started"));
   Serial.print(F("[Web] http://")); Serial.println(WiFi.localIP().toString());
