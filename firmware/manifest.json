@@ -4,5 +4,5 @@
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.26/heltec_wifkit32v2_v526_5272F871_firmware.ino.bin",
   "size": 1389.4,
   "crc32": "5272F871",
-  "changelog": "calibrate button fixed text missing , calibration tweaked overall yay "
+  "changelog": "oled ota prgress bar fixed, calibration tweaked overall yay "
 }
