@@ -23,6 +23,8 @@
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
  *
+ * 
+ * 
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.26 — 2026-05-25
  * ─────────────────────────────────────────────────────────────────────────────
@@ -3251,17 +3253,14 @@ void setupOTA() {
     // Upload handler — called for each HTTP chunk during the file transfer
     []() {
       HTTPUpload &u = server.upload();
-      static uint32_t uploadCrcState = 0;
+      static uint32_t uploadCrcState    = 0;
+      static uint32_t uploadExpectedSize = 0;
 
       if (u.status == UPLOAD_FILE_START) {
         uploadCrcState = 0xFFFFFFFF;
         Serial.printf("[OTA] Start: %s\n", u.filename.c_str());
 
         // ── Boost WDT to 120s for the duration of the upload ────────────────
-        // Flash writes inside Update.write() can stall the CPU for tens of ms
-        // per chunk. At ~200 KB/s a 1.4 MB binary takes ~7s of transfers plus
-        // flash-write time. The default 30s WDT is tight; 120s gives headroom
-        // without removing the safety net entirely.
         esp_task_wdt_config_t otaCfg = {
           .timeout_ms     = 120000,
           .idle_core_mask = 0,
@@ -3269,6 +3268,10 @@ void setupOTA() {
         };
         esp_task_wdt_reconfigure(&otaCfg);
         esp_task_wdt_reset();
+
+        // Capture Content-Length so WRITE handler can show a % progress bar.
+        // Multipart boundary adds ~200 bytes overhead — negligible vs ~1.4MB binary.
+        uploadExpectedSize = (uint32_t)server.header("Content-Length").toInt();
 
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
           Update.printError(Serial);
@@ -3289,8 +3292,6 @@ void setupOTA() {
 
       } else if (u.status == UPLOAD_FILE_WRITE) {
         // ── Feed WDT unconditionally before every flash write ────────────────
-        // This is the crash site: Update.write() erases + programs flash pages,
-        // which can stall the CPU long enough to trip the watchdog between feeds.
         esp_task_wdt_reset();
 
         if (Update.write(u.buf, u.currentSize) != u.currentSize) {
@@ -3306,12 +3307,19 @@ void setupOTA() {
           display.setTextAlignment(TEXT_ALIGN_CENTER);
           display.drawString(64, 0,  "OTA UPLOADING");
           display.drawLine(0, 12, 128, 12);
-          uint32_t recvKB = u.totalSize / 1024;
-          display.drawString(64, 20, String(recvKB) + " KB received");
-          static uint8_t dotIdx = 0; dotIdx = (dotIdx + 1) % 4;
-          String dots(dotIdx, '.');
-          display.drawString(64, 34, "Flashing" + dots);
-          display.drawString(64, 48, "Do not power off");
+          display.drawString(64, 16, String(u.totalSize / 1024) + " / " +
+            (uploadExpectedSize > 0 ? String(uploadExpectedSize / 1024) : "?") + " KB");
+          if (uploadExpectedSize > 0) {
+            int pct = (int)((u.totalSize * 100UL) / uploadExpectedSize);
+            pct = min(pct, 100);
+            display.drawRect(0, 30, 124, 8);
+            display.fillRect(2, 32, (pct * 120) / 100, 4);
+            display.drawString(64, 42, String(pct) + "%  Flashing...");
+          } else {
+            static uint8_t dotIdx = 0; dotIdx = (dotIdx + 1) % 4;
+            display.drawString(64, 36, "Flashing" + String(dotIdx, '.'));
+          }
+          display.drawString(64, 54, "Do not power off");
           display.display();
         }
 
