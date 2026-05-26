@@ -23,8 +23,6 @@
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
  *
- * 
- * 
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.26 — 2026-05-25
  * ─────────────────────────────────────────────────────────────────────────────
@@ -1519,16 +1517,16 @@ void drawFrame2(ScreenDisplay *d, DisplayUiState *s, int16_t x, int16_t y) {
   d->setFont(ArialMT_Plain_10);
   d->drawString(0 + x, 0 + y, "SYSTEM INFO");
   d->drawLine(0 + x, 12 + y, 128, 12 + y);
-  d->drawString(0 + x, 14 + y, device_name);
+  d->drawString(0 + x, 13 + y, device_name);
   if (wifiConnected) {
     String ssid = WiFi.SSID();
     if (ssid.length() > 16) ssid = ssid.substring(0, 13) + "...";
-    d->drawString(0 + x, 24 + y, "WiFi: " + ssid);
-    d->drawString(0 + x, 34 + y, WiFi.localIP().toString());
-    d->drawString(0 + x, 44 + y, "RSSI: " + String(WiFi.RSSI()) + "dBm");
+    d->drawString(0 + x, 23 + y, "WiFi: " + ssid);
+    d->drawString(0 + x, 33 + y, WiFi.localIP().toString());
+    d->drawString(0 + x, 43 + y, "RSSI: " + String(WiFi.RSSI()) + "dBm");
   } else {
-    d->drawString(0 + x, 24 + y, "WiFi: Disconnected");
-    d->drawString(0 + x, 34 + y, "AP: ESP32-Setup");
+    d->drawString(0 + x, 23 + y, "WiFi: Disconnected");
+    d->drawString(0 + x, 33 + y, "AP: ESP32-Setup");
   }
   // Bottom line: uptime + sleep window countdown if active
   String bot = "Up: " + getUptime();
@@ -1536,7 +1534,7 @@ void drawFrame2(ScreenDisplay *d, DisplayUiState *s, int16_t x, int16_t y) {
     int minsLeft = (disableDeepSleepUntil - millis()) / 60000;
     bot = "Awake: " + String(minsLeft) + "m left";
   }
-  d->drawString(0 + x, 54 + y, bot);
+  d->drawString(0 + x, 53 + y, bot);
 }
 
 // Frame 3 — MQTT broker status
@@ -1547,15 +1545,15 @@ void drawFrame3(ScreenDisplay *d, DisplayUiState *s, int16_t x, int16_t y) {
   d->drawString(0 + x, 0 + y, "MQTT STATUS");
   d->drawLine(0 + x, 12 + y, 128, 12 + y);
   String plat = mqtt_platform; plat.toUpperCase();
-  d->drawString(0 + x, 16 + y, "Mode: " + plat);
+  d->drawString(0 + x, 13 + y, "Mode: " + plat);
   if (mqtt_platform == "all" || mqtt_platform == "standard")
-    d->drawString(0 + x, 28 + y, "Std: " + String(mqttStandardConnected ? "OK" : "X"));
+    d->drawString(0 + x, 25 + y, "Std: " + String(mqttStandardConnected ? "OK" : "X"));
   if (mqtt_platform == "all" || mqtt_platform == "adafruit")
-    d->drawString(0 + x, 38 + y, "AIO: " + String(mqttAdafruitConnected ? "OK" : "X"));
+    d->drawString(0 + x, 35 + y, "AIO: " + String(mqttAdafruitConnected ? "OK" : "X"));
   if (mqtt_platform == "all" || mqtt_platform == "ubidots")
-    d->drawString(0 + x, 48 + y, "Ubi: " + String(mqttUbidotsConnected  ? "OK" : "X"));
+    d->drawString(0 + x, 45 + y, "Ubi: " + String(mqttUbidotsConnected  ? "OK" : "X"));
   if (deepSleepEnabled)
-    d->drawString(0 + x, 56 + y, "Sleep: " + String(deepSleepMinutes) + "min");
+    d->drawString(0 + x, 53 + y, "Sleep: " + String(deepSleepMinutes) + "min");
 }
 
 // Frame 4 — WiFi AP / portal info (shown whenever portal is open)
@@ -3925,7 +3923,7 @@ void setupOTA() {
       "&#x2190; Dashboard</a>");
     sendPage(h + pageFoot());
   });
-  
+
   static const char* collectHdrs[] = {"Content-Length"};
   server.collectHeaders(collectHdrs, 1);
   server.begin();
