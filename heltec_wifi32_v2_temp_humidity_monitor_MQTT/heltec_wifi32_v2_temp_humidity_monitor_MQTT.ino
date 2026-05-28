@@ -4,11 +4,18 @@
  * ║               Web Portal + MQTT-Enabled IoT System                        ║
  * ╚═══════════════════════════════════════════════════════════════════════════╝
  *
+ * ██████╗░██╗██╗░░██╗██╗░░░░░███████╗
+ * ██╔══██╗██║██║░██╔╝██║░░░░░╚════██║
+ * ██████╔╝██║█████═╝░██║░░░░░░░███╔═╝
+ * ██╔═══╝░██║██╔═██╗░██║░░░░░██╔══╝░░
+ * ██║░░░░░██║██║░╚██╗███████╗███████╗
+ * ╚═╝░░░░░╚═╝╚═╝░░╚═╝╚══════╝╚══════╝ESP32
+ *
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.26
- * Last Updated:  2026-05-25
+ * Version:       5.28
+ * Last Updated:  2026-05-28
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -24,33 +31,38 @@
  *  • Deep sleep support for low-power operation
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.26 — 2026-05-25
+ * CHANGELOG v5.28 — 2026-05-28
  * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: learnedVFull was always reset to 3.92V on every calibration save,
- *         even when calibrating on USB. This corrupted the battery % curve
- *         (adaptive full-voltage lost) until the battery re-learned it.
- *         Fix: learnedVFull reset only occurs in battery-only calibration mode.
- *  - FIX: Back-calculation race in /calibrate POST. batteryVoltFloat is
- *         rewritten every 5s by battery_read(); if the power source changed
- *         between the last read and the form submit, activeFactor would not
- *         match the factor used to produce batteryVoltFloat, giving a wrong
- *         new calibration factor. Fix: global lastRawAvgMv stores the raw
- *         ADC millivolts from every battery_read() and boot read; calibration
- *         back-calc uses it directly (newFactor = realV / (lastRawAvgMv/1000))
- *         — no round-trip through batteryVoltFloat needed.
- *  - FIX: Silent calibration rejection. When batteryVoltFloat < 100 (battery
- *         not yet read — e.g. page loaded immediately at boot), submitting the
- *         form re-rendered the page with no feedback. Now shows a red error
- *         card: "Reading not ready — wait a few seconds and try again."
- *  - IMPROVE: /calibrate success page now redirects to /calibrate (not /)
- *         so the user lands directly on step 2 without manual navigation.
- *  - IMPROVE: /calibrate page gains step-completion indicators. Each of the
- *         two mode rows in the "Stored Calibration Factors" table now shows:
- *         ✅ calibrated (factor differs from default) or ⏳ not yet set.
- *         The "Next step" hint in the success message is now a clickable link.
- *  - IMPROVE: Input placeholder voltage now correctly shows typical USB-only
- *         floating range (0.000) when isBatFloating is true, preventing
- *         a user from entering a real voltage for a no-battery condition.
+ *  - FIX: Screensaver idle timeout now works correctly.
+ *         Root cause: lastActivityMs was being reset inside the ui.update()
+ *         block on every loop iteration (ui.update() always returns >= 0 while
+ *         frames are running), so the 30 s countdown could never expire.
+ *         Fix: removed that reset entirely — idle timer is now only reset by
+ *         real user events (button press / ssaverResetActivity) and once on
+ *         boot when the display is turned on.
+ *  - FIX: Screensaver preview now works even when ssaverEnabled = false.
+ *         runScreensaver() was bailing out at the top guard and immediately
+ *         killing the preview.  Guard now passes ssaverPreview through.
+ *  - FIX: Preview button in /settings now previews the *currently selected*
+ *         dropdown preset without requiring a Save first.  Button uses inline
+ *         JS to read the live <select> value and passes it as ?p=N to the
+ *         /ssaver_preview route.  Select your preset → click Preview → see it
+ *         on the OLED instantly.  Save separately when you're happy.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.27 — 2026-05-27
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - ADD: OLED screensaver with 3 animated presets:
+ *         0 = Bouncing Ball (dot-product physics, 1-pixel ball + halo cross)
+ *         1 = Mario Bounce (gravity arc, wall bounce, 9×11 sprite, 2-frame walk
+ *             anim, horizontal mirror on direction change)
+ *         2 = Matrix Rain (21 falling columns, variable speed/trail, monochrome)
+ *  - ADD: /settings screensaver section: enable toggle, idle timeout dropdown
+ *         (30s → 1 hr), preset select, and live Preview buttons for each preset.
+ *  - ADD: /ssaver_preview?p=N route — starts chosen preset for 10 s overlay
+ *         without requiring a settings save first.
+ *  - ADD: Any button press dismisses the screensaver instantly (ssaverResetActivity).
+ *  - ADD: NVS persistence ("oled" namespace) via loadOledConfig/saveOledConfig.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * REQUIRED LIBRARIES
@@ -65,351 +77,6 @@
  *  • Heltec Board Package — Hardware-specific libraries
  *
  * ─────────────────────────────────────────────────────────────────────────────
- */
-/*
- * ESP32 Complete IoT System — Heltec WiFi Kit 32 V2
- * VERSION: 5.26 — 2026-05-25
- *
- * CHANGELOG v5.26 — 2026-05-25:
- *  - FIX: Single vdivFactor calibrated on USB gave wrong reading on battery.
- *         Root cause: ESP32 ADC is non-linear; the built-in eFuse calibration
- *         curve reduces but does not eliminate voltage-dependent offset (~2%
- *         error across a 3.7–4.1V range is typical). One calibration point at
- *         4.1V USB leaves battery readings ~75mV high at 3.77V.
- *  - ADD: Two-factor calibration — vdivFactor (USB/floating mode) and
- *         vdivFactorBat (battery-only mode), stored separately in NVS as
- *         "battery"/"vdiv" and "battery"/"vdiv_bat". Both default to
- *         VDIV_FACTOR_DEFAULT; vdiv_bat falls back to vdiv if never set.
- *  - ADD: Two-pass source+factor selection in battery_read() and boot read:
- *         pass 1 — raw estimate with vdivFactor to determine USB vs battery;
- *         pass 2 — re-read with vdivFactor (USB/floating) or vdivFactorBat
- *         (battery only). USB detection threshold still works because the gap
- *         between USB rail (~4.1V) and max battery (~3.95V) is large enough
- *         that a 2% error never crosses the 4.08V threshold.
- *  - ADD: /calibrate page is now mode-aware: detects current source, saves to
- *         the correct NVS key, shows BOTH factors, and tells you which mode
- *         to calibrate next. Clear instructions guide USB-first, battery-second.
- *
- * CHANGELOG v5.24 — 2026-05-21:
- *  - FIX: /ota_check route now properly flags otaUpdateAvailable so the dashboard
- *         banner AND the OTA page both refresh immediately after a manual check.
- *         The /ota_check JSON response now includes build_date so the OTA page
- *         can show the full manifest card without a second fetch.
- *  - FIX: Dashboard OTA banner linked to /ota_install_github (404). Corrected to
- *         /ota_install — the actual server route for the GitHub streaming install.
- *  - FIX: OTA ntfy notification cooldown was millis()-based (lastOtaNtfy) and
- *         reset to 0 on every deep-sleep wake. Now NVS-persisted as epoch
- *         ("ota"/"ntfy_ep") so the 24-hour cooldown correctly spans sleep cycles.
- *  - FIX: power_src missing from Adafruit IO boot publish (power-source feed).
- *  - FIX: power_src missing from Ubidots boot payload JSON.
- *  - ADD: ota_available field in Standard MQTT boot and sensor payloads so HA /
- *         Node-RED can see whether a firmware update is pending.
- *  - ADD: OTA page "Check Now" button now shows a full manifest card when an
- *         update is found: remote version, build date, changelog, manifest CRC32,
- *         file size, and an "Install from GitHub" button. File CRC32 is compared
- *         live against the manifest CRC32 with colour coding (green=match, red=mismatch).
- *  - CHANGE: OLED OTA-available indicator changed from right-aligned "\x18UPD"
- *            to a filled up-arrow triangle + "FW" label, starting at x=68
- *            (just after the widest frame header "SYSTEM INFO" / "MQTT STATUS").
- *            Visible, unambiguous, and consistent across all 5 frames.
- *
- * CHANGELOG v5.23 — 2026-05-21:
- *  - FIX: Battery source detection false-positive "USB/ONLY" on real battery.
- *         Root cause A: variance check `vvar <= 25 && v < BAT_USB_THRESHOLD`
- *         was triggering on a stable LiPo at 3.8V. A real battery at float charge
- *         is very stable — low variance is NOT a reliable indicator of no-cell.
- *         Only v < BAT_FLOAT_VOLTAGE (2.8V) reliably means "no cell present".
- *         Fix: removed variance criterion from isBatFloating entirely. Now only:
- *           isBatFloating = (v < BAT_FLOAT_VOLTAGE)
- *         Same fix applied to boot battery read.
- *  - FIX: Battery source false "USB/CHG" on first read after boot on battery.
- *         Root cause B: lastHighVoltageTime initialised to 0 (global scope).
- *         At first battery_read(), millis() might be ~3000ms. millis()-0 = 3000
- *         which is < BAT_USB_HYSTERESIS_MS (30000), so the hysteresis arm fires
- *         and sets isUSBPowered=true even though no USB voltage was ever seen.
- *         Fix: added `bool hadHighVoltage = false` guard. Hysteresis only
- *         applies after at least one genuine high-voltage reading.
- *  - FIX: Ubidots/MQTT power_src field not using powerSrcJson() — was still
- *         `isUSBPowered ? "usb" : "battery"`, missing the "usb_only" third state.
- *  - ADD: Dashboard OTA update-available banner. When the manifest check finds a
- *         newer version, a teal card appears at the TOP of the dashboard (matching
- *         the green-box position shown in the screenshot). Shows version, date,
- *         changelog, manifest CRC32, and direct "Install from GitHub" + "Upload
- *         manually" buttons. Replaces the plain OTA button when update is available.
- *  - ADD: OTA page remote info injection. GET handler now injects the manifest
- *         CRC32, remote version, date, and changelog as a server-side rendered
- *         card when an update is available. Lets user compare manifest CRC vs
- *         computed file CRC before uploading.
- *
- * CHANGELOG v5.22 — 2026-05-20:
- *  - FIX: WDT crash during OTA upload (Backtrace: 0x4008c8e7 ...).
- *         Root cause: UPLOAD_FILE_WRITE calls Update.write() (flash, slow) with no
- *         watchdog feed in the hot path. With a ~1.35MB binary this stalls the 30s WDT.
- *         Fix: (a) esp_task_wdt_reset() called unconditionally at top of every
- *         UPLOAD_FILE_WRITE callback. (b) WDT timeout temporarily raised to 120s
- *         in UPLOAD_FILE_START and restored to WDT_TIMEOUT_SEC in UPLOAD_FILE_END /
- *         completion handler, so a genuinely stalled upload is still caught.
- *  - FIX: OTA check interval was millis()-based — millis() resets to ~0 on every
- *         deep-sleep wake, so the 1-hour interval was meaningless. Replaced with
- *         NVS-persisted epoch timestamp ("ota"/"last_chk"). Check runs at most once
- *         per OTA_CHECK_INTERVAL_SECS (86400 = 1 day). Falls back to checking on
- *         every wake if NTP is not yet synced (epoch=0). Also added:
- *         RTC_DATA_ATTR bool rtcOtaAvailable — survives deep sleep without NVS read,
- *         so OLED update-available icon persists across wake cycles between checks.
- *  - ADD: OLED update-available indicator — small "^" arrow icon overlaid on frame
- *         dot bar when rtcOtaAvailable is set. Mirrors pro hardware behaviour
- *         (pending update visible on device itself, not just web UI / ntfy).
- *  - FIX: Post-OTA boot splash not appearing — added Serial diagnostics for NVS
- *         flag read; guarded against display not yet on by calling displayOn()
- *         unconditionally inside showOtaBootSplash (was already there but now
- *         also resets the ui frames so the splash isn't immediately overwritten).
- *
- * CHANGELOG v5.21 — 2026-05-20:
- *  - ADD: GitHub OTA update check — fetches manifest.json from firmware repo,
- *         compares semver against FW_VERSION, notifies via MQTT + ntfy when a
- *         newer build is available. Checks once at boot + every OTA_CHECK_INTERVAL
- *         (default 1 h). Notification cooldown 24 h to prevent spam.
- *  - ADD: Streaming OTA from GitHub — /ota_install endpoint downloads the .bin
- *         directly on-device via HTTPClient, streams to Update library, verifies
- *         CRC32 against manifest value before marking flash valid. Full OLED
- *         progress during download + flash. Aborts cleanly on CRC mismatch.
- *  - ADD: Server-side CRC32 — all uploads (manual drag-drop + GitHub install)
- *         now compute CRC32 incrementally in the upload handler. Displayed in
- *         Serial log; matched against manifest value when installing from GitHub.
- *  - ADD: FW_VER_MARKER — "FW_VER:5.21" embedded in .rodata so the OTA page JS
- *         sniffVersion() finds the version reliably via marker search, with
- *         pattern-scan fallback for older builds.
- *  - ADD: Post-update OLED boot splash — after a successful OTA reboot the OLED
- *         shows "FIRMWARE UPDATED / v5.20 → v5.21 / Boot#N" for ~8 s before the
- *         normal rotating frames start. Previous version saved to NVS ("ota/prev_ver")
- *         in the OTA completion handler; cleared after display.
- *  - ADD: Dashboard update-available banner — blue card with version, changelog
- *         snippet, and Install / Dismiss buttons when manifest reports newer build.
- *  - IMPROVE: /ota_check web route — triggers an immediate manifest fetch and
- *         returns JSON result (suitable for polling or manual triggering).
- *
- * CHANGELOG v5.20 — 2026-05-20:
- *  - FIX: Battery source detection fully aligned across all outputs.
- *         Three-state model: USB/ONLY (no cell, floating ADC), USB/CHG (cell+charging),
- *         Battery (cell only). isBatFloating now detects sub-BAT_FLOAT_VOLTAGE (<2.8V)
- *         OR low-variance sub-threshold, whichever triggers first. Both boot and
- *         runtime reads use identical logic. Added BAT_FLOAT_VOLTAGE 2.8V define.
- *         powerSrcStr() and powerSrcJson() helpers ensure all ntfy, MQTT, and
- *         Serial outputs are coherently aligned. Serial now shows "USB/ONLY" when
- *         no battery is detected (was incorrectly showing "USB/CHG" in some paths).
- *  - IMPROVE: OTA page rebuilt — shows current→new version comparison, client-side
- *         CRC32, file size, .merged.bin guard with hard block, clearer error messages
- *         with recovery instructions. POST handler uses Update.begin(UPDATE_SIZE_UNKNOWN)
- *         for correct partition sizing. OLED shows animated countdown (10s timer bar)
- *         on success, failure reason on error.
- *  - ADD: Screen clean preset 3 — "Full Bright Pulse": fills all 128×64 pixels
- *         white then flashes on/off every 1s, maximum pixel exercise at peak brightness.
- *  - ADD: GitHub link panel on dashboard — grey .card background, ♥ left-aligned,
- *         link colour matches UI accent (#64B5F6), firmware version right-aligned.
- *
- * CHANGELOG v5.19 — 2026-05-07:
- *  - IMPROVE: MQTT /status topic now publishes "awake" on connect (was "online").
- *             "awake"/"sleeping" is a consistent semantic pair — better for HA
- *             automations than mixing "online"/"sleeping".
- *  - IMPROVE: publishBootSummary() ntfy title now reflects wakeup reason:
- *             "Boot" for power-on, "Wake (timer)" for timer, "Wake (button)" for button.
- *             Consistent emoji line added: src icon + voltage + % + wake mode.
- *  - IMPROVE: publishSensorData() ntfy format tightened to match boot style.
- *  - IMPROVE: powerDownPeripherals() ntfy sleep format tightened to match.
- *  - IMPROVE: MQTT boot JSON gains "wake_mode" field ("active"/"stealth") so
- *             HA/Node-RED can see which display mode was in effect this wake.
- *  - NOTE:    power_src "usb" on wake is correct when USB is connected — the
- *             blocking boot ADC read (14-sample trimmed mean) accurately reflects
- *             actual power source. Not a bug.
- *
- * Features: WiFiManager portal, OTA, DHT22, MQTT (Std/AIO/Ubidots/ALL),
- *   OLED 5-frame display, deep sleep (timer+button), JLed, ntfy.sh,
- *   battery monitor, pre-sleep power shutdown, CPU freq control.
- *
- * CHANGELOG v5.15 — 2026-05-07:
- *  - FIX: Stealth/Ghost mode OLED still lit on timer wakes.
- *         Root causes: (a) loadDeepSleepConfig() read "wake_disp" from NVS AFTER
- *         preferences.end() — always returned default (Active). Fixed by moving
- *         the getUChar() call inside the begin/end block. (b) goToDeepSleep()
- *         called drawSleepOverlay() which sends display.display(), turning the
- *         panel back on in stealth mode. Guarded with stealthThisWake check —
- *         countdown skipped silently when stealth is active.
- *         (c) setupWiFiManager() blink guard already present via stealthThisWake;
- *         confirmed correct.
- *  - FIX: Device not sleeping within 45s window.
- *         readSensor() DHT failure path returned early without setting
- *         triggerDeepSleepAfterPublish=true, leaving the sleep trigger unset.
- *         Flag is now always set after readSensor() regardless of DHT success.
- *         (Already partially fixed in v5.13; confirmed and hardened here.)
- *  - FIX: HTML malformed in /settings Deep Sleep section.
- *         Wake display mode radio block was missing the closing </div> for the
- *         <div class='sec'> before the ntfy section, causing browser to misparse
- *         the form layout. Restructured the string chain with clean open/close.
- *  - FIX: wakeDisplayMode NVS key "wake_disp" consolidated into "deep" namespace
- *         (matches saveDeepConfig). Removed the separate duplicate getUChar() call
- *         that was outside the preferences begin/end block.
- *  - RENAME: "Active" / "Stealth" are the canonical mode names (was "Pulse"/"Ghost"
- *         in some intermediate versions). All HTML, Serial, and comments now
- *         consistently use Active / Stealth.
- *
- * CHANGELOG v5.13 — 2026-05-04:
- *  - ADD: Wake Display Mode — two presets stored in NVS ("deep"/"wake_disp"):
- *           Active (1, default) — OLED on + LED breathing during wake window.
- *           Stealth (0)         — OLED off + LED off; silent eco operation.
- *         Button-triggered wakes always use Active so the user gets feedback.
- *  - ADD: stealthThisWake flag — computed once in setup() from wakeDisplayMode
- *         and wakeupCause; propagates through WiFi connect, LED, and loop().
- *  - ADD: Wake mode shown on dashboard Deep Sleep card.
- *  - ADD: Wake mode radio buttons in /settings Deep Sleep section.
- *  - FIX: readSensor() failure path now always sets triggerDeepSleepAfterPublish
- *         so a DHT read failure no longer prevents the device from sleeping.
- *
-
- * CHANGELOG v5.10 — 2026-05-04:
- *  - FIX: isBatFloating variance threshold raised 5->25 mV (runtime) and 8->25 mV (boot).
- *         A full, stable LiPo at float charge (~3.9V) has near-zero ADC variance and was
- *         being incorrectly flagged as "no battery detected". Only a truly floating pin
- *         (USB-only, no cell) produces spread consistently below 25 mV.
- *  - FIX: voltsToPercent() dead-code duplicate `if (v >= 4.00f)` block removed.
- *         The second identical branch was unreachable and confused future maintenance.
- *  - FIX: Deep Sleep settings page — "Wake interval (minutes)" input rendered value=''
- *         because deepSleepMinutes was never concatenated. Now shows saved value.
- *  - FIX: CPU MHz dropdown non-selected <option> tags were missing closing '>',
- *         producing malformed HTML. Browser fell back to showing only 240 MHz.
- *  - CHANGE: Default publish interval changed 60s -> 600s (10 min) to match
- *         typical deep-sleep interval and reduce traffic when freshly provisioned.
- *  - CHANGE: Boot# reset button moved from dashboard to Settings page.
- *         Dashboard is cleaner; Settings page is the right home for maintenance actions.
- *  - CHANGE: Default vdiv calibrate: behaviour unchanged; NVS default for pub_sec is 600.
- *
- *  - FIX: OLED never showed any content after config settings were saved.
- *         powerUpPeripherals() was missing display.init() + display.displayOn()
- *         + display.clear() after Vext was restored. Fixed.
- *  - FIX: drawFrame5 (battery screen) redesigned — no overlapping text/gfx.
- *         Battery-only: source+voltage, charge%, full-width bar, warning note.
- *         ntfy info removed from this frame.
- *  - ADD: OLED sleep-countdown overlay (3..2..1) shown in goToDeepSleep()
- *         before powerDownPeripherals(). drawSleepOverlay() helper styled
- *         consistently with the existing drawHoldOverlay().
- *  - ADD: ntfy verbosity control — four independent NVS-persisted flags:
- *           ntfy_on_batt    — low/critical battery (default ON; fires even
- *                             when ntfy_on_publish is OFF)
- *           ntfy_on_boot    — boot/wake summary (default ON)
- *           ntfy_on_sleep   — going-to-sleep notification (default OFF)
- *           ntfy_on_publish — every periodic publish (default OFF)
- *         Web settings updated with labelled checkboxes + explanations.
- *         Dashboard ntfy card shows which alert types are active.
- *  - ADD: publishBatteryStatus(level) — broadcasts low/critical/ok to all
- *         configured MQTT brokers, independent of ntfy:
- *           Std:  <topic>/status = "battery_low"|"battery_critical"
- *                 <topic>/battery = JSON with est_sleeps field
- *           AIO:  <user>/feeds/battery-status = "low"|"critical"|"ok"
- *           Ubi:  battery_status = 0(ok)|1(low)|2(critical)
- *         Recovery "ok" publish fires when battery rises above warn+5%.
- *  - ADD: batt_status field in all MQTT sensor + boot payloads.
- *  - ADD: estSleepsRemaining() — rough cycle estimate shown in ntfy messages
- *         for low-battery, critical, boot, and sleep notifications.
- *
- *  - FIX: All web handler h+= lines had a stray extra ) left over from the
- *         v5.6 streaming refactor. /settings, /wifi, /calibrate also missing
- *         String h = pageHead(...) capture. All corrected.
- *  - FIX: BAT_USB_THRESHOLD lowered 4.15->4.05V. USB rail on this hardware
- *         reads 4.10-4.12V, well below the old 4.15V cutoff — USB was never
- *         detected. 4.05V sits cleanly between USB floor and battery max.
- *  - FIX: Boot battery read added 50ms ADC settling delay, 500µs inter-sample
- *         spacing, and drops min+max outliers (14-sample trimmed mean) to
- *         prevent boot ADC spikes falsely triggering isUSBPowered.
- *  - FIX: voltsToPercent() learnedVFull tolerance tightened 0.02->0.01V —
- *         prevents falsely reporting 100% when battery is e.g. 3.78V but
- *         learnedVFull drifted down to 3.79V from a marginal ADC reading.
- *  - FIX: publishBootSummary() "version" field was hardcoded "5.3". Now uses
- *         FW_VERSION define — always matches sketch version automatically.
- *  - CONSISTENCY: All outputs (MQTT std/AIO/Ubidots, ntfy, HTML) now use the
- *         same batteryVoltFloat/batteryPercentage/isUSBPowered variables.
- *         ntfy boot message now includes power_src and firmware version.
- *         ntfy sensor message now includes power_src on its own line.
- *         ntfy sleeping notification added — mirrors MQTT /status "sleeping".
- *  - OPT: bootCount NVS write-on-every-boot replaced with RTC+NVS hybrid.
- *         Sleep wakes (timer/button) increment RTC_DATA_ATTR rtcBootOffset only
- *         — zero flash writes. Power-on/crash writes NVS (the event that matters).
- *         bootCount displayed = nvsBase + rtcBootOffset, fully continuous.
- *         MQTT boot payload gains "sleep_wakes" field (RTC offset since last
- *         power-on) so the split is visible in your broker if needed.
- *  - FIX: WiFiManager portal OLED frame only showed during double-reset forced
- *         portal, not during first-time autoConnect() portal. Fixed by using
- *         wm.setAPCallback() which fires the moment the AP opens in both paths.
- *         portalActive flag and frame4 switch now happen reliably every time.
- *  - IMPROVE: drawFrame4 (portal screen) redesigned with numbered steps matching
- *         the style of other OLED frames: "1. Join ESP32-Setup / 2. Open 192.168.4.1"
- *  - ADD: /reset_bootcount web route + dashboard button (Boot#) with confirm
- *         dialog. Resets NVS base and rtcBootOffset to 1 without device restart.
- *
- * CHANGELOG v5.7:
- *  - FIX: Web UI slow "typing" effect — CONTENT_LENGTH_UNKNOWN forced HTTP
- *         chunked transfer; browser rendered each small fragment individually.
- *         pageHead()/pageFoot() now return Strings, all handlers buffer into
- *         String h and call sendPage(h) — single response, instant render.
- *  - FIX: Battery % on USB showed 95% (4.2V fell below learnedVFull-0.02).
- *         voltsToPercent() now returns 100% immediately when isUSBPowered.
- *  - FIX: learnedVFull default changed 4.12->4.00V (this battery max ~3.9-4.0V).
- *  - FIX: BAT_USB_THRESHOLD raised 4.05->4.15V — clearer USB vs battery gap.
- *  - KEEP: All settings sections (AIO/Ubidots/ntfy/DeepSleep/PowerSave) intact.
- *
- * CHANGELOG v5.6 — 2026-05-01:
- *  - OPT: All large HTML pages converted to streaming sendContent() calls —
- *         eliminates ~20KB of runtime String heap allocations.
- *  - OPT: Shared COMMON_CSS[] in PROGMEM — one CSS block used by all pages
- *         instead of repeating ~1KB of CSS in each page String.
- *  - OPT: OTA_HTML[] already PROGMEM — kept as-is.
- *  - OPT: F() macro applied to all Serial.print/println string literals —
- *         moves debug strings from RAM to flash (~1KB recovered).
- *  - OPT: pageHead()/pageFoot() helpers stream common boilerplate from flash.
- *  - NO functionality changes — all web pages, MQTT, deep sleep, battery,
- *         ntfy, OTA, button, OLED, power-save features identical to v5.5.
- *
- * CHANGELOG v5.5 — 2026-04-29:
- *  - ADD: actionPage() helper — shared animated response page used by all
- *         action endpoints. Shows icon, message, 6px shrink countdown bar,
- *         auto-redirects to dashboard, plus immediate "Back now" button.
- *  - FIX: /save_settings — was bare meta-refresh with no feedback. Now shows
- *         "Settings Saved" with 4s countdown back to dashboard.
- *  - FIX: /reset — now shows "Restarting" with 3s countdown bar.
- *  - FIX: /reset_wifi — now shows instructions to connect to ESP32-Setup AP.
- *  - FIX: /calibrate — form is now properly styled matching rest of UI.
- *         On successful calibration shows "Calibration Saved" with new factor
- *         value and 5s countdown. Back button on form page.
- *
- * CHANGELOG v5.4 — 2026-04-29:
- *  - FIX: Battery reads wrong voltage (showed 3.70V vs real 3.92V).
- *         Switched from raw analogRead() to analogReadMilliVolts() which
- *         uses ESP32 eFuse ADC calibration — accurate across full range.
- *         Conversion: v = (avg_amv/1000) * vdivFactor (default 2.68).
- *  - ADD: vdivFactor runtime variable loaded from NVS ("battery"/"vdiv").
- *         Factory default 2.68 (calibrated: 3.92V real / 1463mV AMV).
- *  - ADD: /calibrate web endpoint — enter multimeter reading, board
- *         computes and saves correct vdivFactor to NVS automatically.
- *         Link shown next to voltage on dashboard.
- *  - FIX: Boot battery read used wrong formula after analogRead->AMV switch.
- *         Also loads vdivFactor from NVS at boot for consistency.
- *  - FIX: voltsToPercent() top reference uses learnedVFull (adaptive)
- *         instead of hardcoded 4.20V for more accurate % on this battery.
- *  - TRIM: 16 samples + 100μs settle replaces 64 bare samples —
- *         same noise reduction, ADC cap settles properly between reads.
- *
- * CHANGELOG v5.2 — 2026-04-28:
- *
- *
- *
- *  - ADD: learnedVFull — adaptive full-voltage tracking with NVS persistence
- *         ("battery" namespace, key "vFull"). Auto-updates when a higher voltage
- *         is seen; used as the upper reference for voltsToPercent().
- *  - ADD: USB/charging hysteresis via lastHighVoltageTime: isUSBPowered stays
- *         true for 15 s after voltage drops below BAT_USB_THRESHOLD, preventing
- *         display/alert flicker when the charger briefly throttles back.
- *  - TRIM: Removed verbose inline comments to recover flash headroom.
- *
- * Required Libraries: WiFiManager (tzapu), PubSubClient, DHT + Adafruit Sensor,
- *   ArduinoJson v7, OneButton, JLed, HTTPClient (built-in), Heltec board package.
  */
 
 
@@ -458,7 +125,7 @@
 //   USB detection: ADC only ever sees VBAT. Charging raises it above ~4.05V.
 //   USB-only / no battery = ADC floats; caught by variance check (isBatFloating).
 // ─────────────────────────────────────────────────────────────────────────────
-#define FW_VERSION            "5.26"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.28"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -693,6 +360,30 @@ uint8_t       screenCleanPreset   = 0;  // 0=Checkerboard 1=InvertRamp 2=Scanlin
 bool     scrollPaused      = false;  // toggled by 3-click
 int      globalHoldSeconds = 0;      // >0: button hold overlay (countdown to sleep trigger)
 int      globalSleepCountdown = 0;   // >0: imminent-sleep overlay (3..2..1 before sleep)
+// ── OLED Screensaver ──────────────────────────────────────────────────────START
+bool     ssaverEnabled     = false;  // master on/off
+uint32_t ssaverTimeoutSecs = 60;     // idle seconds before activation
+uint8_t  ssaverPreset      = 0;      // 0=Bouncing Ball  1=Mario  2=Matrix Rain
+bool     ssaverActive      = false;  // screensaver currently running
+bool     ssaverPreview     = false;  // preview mode — auto-exits after 10 s
+uint8_t  ssaverSavedPreset = 0;      // preset stored before a preview overrides it
+unsigned long lastActivityMs  = 0;   // millis() of last user / display activity
+unsigned long ssaverFrameMs   = 0;   // internal per-animation frame timer
+unsigned long ssaverStartMs   = 0;   // millis() when screensaver activated
+// Bouncing Ball state
+static float bbX = 32, bbY = 16, bbVx = 1.7f, bbVy = 1.1f;
+// Mario state
+static float  mrX = 20, mrY = 30, mrVx = 1.5f, mrVy = 0.0f;
+static uint8_t mrFrame = 0;
+static unsigned long mrLastMoveMs = 0, mrLastFrameMs = 0;
+// Matrix Rain state
+#define MX_COLS   21   // 21 × 6 px ≈ 126 px wide
+#define MX_COL_PX  6
+static int16_t mxHead[MX_COLS];
+static uint8_t mxSpeed[MX_COLS];
+static uint8_t mxLen[MX_COLS];
+static bool    mxInited = false;
+// ── OLED Screensaver ──────────────────────────────────────────────────────END
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sensor
@@ -960,6 +651,25 @@ void loadPowerSaveConfig() {
   preferences.end();
   if (ps_cpu_wake_mhz != 80 && ps_cpu_wake_mhz != 160 && ps_cpu_wake_mhz != 240)
     ps_cpu_wake_mhz = 240;
+}
+
+// Load screensaver settings from "oled" namespace
+void loadOledConfig() {
+  preferences.begin("oled", true);
+  ssaverEnabled     = preferences.getBool ("ss_en",      false);
+  ssaverTimeoutSecs = preferences.getUInt ("ss_timeout", 60);
+  ssaverPreset      = preferences.getUChar("ss_preset",  0);
+  preferences.end();
+  if (ssaverPreset > 2)          ssaverPreset      = 0;
+  if (ssaverTimeoutSecs < 10)    ssaverTimeoutSecs = 10;
+}
+
+void saveOledConfig() {
+  preferences.begin("oled", false);
+  preferences.putBool ("ss_en",      ssaverEnabled);
+  preferences.putUInt ("ss_timeout", ssaverTimeoutSecs);
+  preferences.putUChar("ss_preset",  ssaverPreset);
+  preferences.end();
 }
 
 // Save power-save flags to "pwrsave" namespace
@@ -2138,8 +1848,7 @@ static const char COMMON_CSS[] PROGMEM =
   ".sec h2{color:#9e9e9e;font-size:16px;margin-bottom:16px;border-bottom:1px solid #424242;padding-bottom:8px}"
   ".info{background:#1a237e;padding:12px;border-radius:6px;margin:12px 0;font-size:12px;color:#90caf9;border:1px solid #283593}"
   ".cb{display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0}.cb input{width:auto}"
-  ".back{background:#757575}.back:hover{background:#616161}";
-
+  ".back{background:#757575;color:#fff !important}.back:hover{background:#616161}";
 // Return standard head string for buffered page sends
 static String pageHead(const String& title) {
   return String(F("<!DOCTYPE html><html><head><title>")) + title +
@@ -3539,20 +3248,55 @@ void setupOTA() {
       "<label>Duration (seconds)</label>"
       "<div class='row'><input type='number' name='scrn_dur' value='");
     h+=String(screenCleanDuration);
-    h+=F("' min='10' max='600'></div>"
-      "</div>");
-    // Run/Cancel buttons — outside the save form, always visible
-    h += F("<div style='margin:0 0 16px 0;display:flex;gap:8px;flex-wrap:wrap'>");
+    h+=F("' min='10' max='600'></div>");
+
+    // Run Now button — now INSIDE the Display Care panel
+    h += F("<div style='margin-top:12px'>");
     h += F("<a href='/screen_clean' class='btn'>&#x25B6; Run Now</a>");
     if (screenCleanActive) {
       int sl = max(0L,(long)(screenCleanUntil-millis())/1000L);
-      h += F("<a href='/screen_cancel' class='btn' style='background:#c62828'>"
+      h += F("<a href='/screen_cancel' class='btn' style='background:#c62828;margin-left:8px'>"
             "&#x23F9; Cancel (");
       h += String(sl);
       h += F("s)</a>");
     }
-    h += F("</div>");
+    h += F("</div></div>");  // close Display Care sec
 
+    // ── OLED Screensaver section ─────────────────────────────────────────────
+    h += F("<div class='sec'><h2>&#x2728; OLED Screensaver</h2>"
+      "<div class='info'>Animated overlay after idle. Button press dismisses it.</div>"
+      "<label class='cb'><input type='checkbox' name='ss_en'");
+    if (ssaverEnabled) h += F(" checked");
+    h += F("> <strong>Enable screensaver</strong></label>"
+
+    "<label>Idle timeout</label>"
+    "<select name='ss_timeout'>");
+    struct { uint32_t v; const char* lbl; } ssTO[] = {
+      {30,"30 seconds"},{60,"1 minute"},{300,"5 minutes"},
+      {600,"10 minutes"},{1800,"30 minutes"},{3600,"1 hour"}
+    };
+    for (auto& t : ssTO) {
+      h += F("<option value='"); h += String(t.v);
+      if (ssaverTimeoutSecs == t.v) h += F("' selected>"); else h += F("'>");
+      h += t.lbl; h += F("</option>");
+    }
+    h += F("</select>"
+
+    "<label>Animation preset</label>"
+    "<select name='ss_preset'>"
+    "<option value='0'"); if (ssaverPreset==0) h+=F(" selected"); h+=F(">&#x26AA; Bouncing Ball</option>"
+    "<option value='1'"); if (ssaverPreset==1) h+=F(" selected"); h+=F(">&#x1F344; Mario Bounce</option>"
+    "<option value='2'"); if (ssaverPreset==2) h+=F(" selected"); h+=F(">&#x1F7E9; Matrix Rain</option>"
+    "</select>"
+
+    "<div style='margin:12px 0 8px 0'>"
+    "<button type='button' class='btn' style='font-size:13px;background:#4db6ac'"
+    " onclick=\"window.location='/ssaver_preview?p='+document.querySelector('[name=ss_preset]').value\">"
+    "&#x25B6; Preview Selected Preset</button>"
+    "<span style='display:block;margin-top:6px;font-size:11px;color:#9e9e9e'>"
+    "Runs the chosen preset for 10 s &mdash; no save needed. "
+    "Press device button to dismiss early.</span>"
+    "</div></div>");
     h += F("<button type='submit' class='btn'>&#x1F4BE; Save</button>"
       "<a href='/' class='btn back'>&#x2190; Back</a>"
       "<a href='/reset_bootcount'"
@@ -3586,6 +3330,19 @@ void setupOTA() {
     if(server.hasArg("wake_disp")){uint8_t wd=(uint8_t)server.arg("wake_disp").toInt();wakeDisplayMode=(wd<=1)?wd:1;}
     if(server.hasArg("scrn_preset")){uint8_t sp=(uint8_t)server.arg("scrn_preset").toInt();if(sp<=3)screenCleanPreset=sp;}
     if(server.hasArg("scrn_dur")){int sd=server.arg("scrn_dur").toInt();if(sd>=10&&sd<=600)screenCleanDuration=(uint16_t)sd;}
+    ssaverEnabled = server.hasArg("ss_en");
+    if (server.hasArg("ss_timeout")) {
+      uint32_t st = (uint32_t)server.arg("ss_timeout").toInt();
+      if (st >= 10) ssaverTimeoutSecs = st;
+    }
+    if (server.hasArg("ss_preset")) {
+      uint8_t sp = (uint8_t)server.arg("ss_preset").toInt();
+      if (sp <= 2) ssaverPreset = sp;
+    }
+    // Force reload to make sure variables are in sync
+    saveOledConfig();
+    loadOledConfig();   // <--- Important: reload immediately
+
     ntfy_enabled   =server.hasArg("ntfy_enabled");
     ntfy_on_batt   =server.hasArg("ntfy_on_batt");
     ntfy_on_boot   =server.hasArg("ntfy_on_boot");
@@ -3608,7 +3365,7 @@ void setupOTA() {
       uint32_t mhz=(uint32_t)server.arg("ps_cpu_wake_mhz").toInt();
       if(mhz==80||mhz==160||mhz==240){ps_cpu_wake_mhz=mhz;setCpuFrequencyMhz(mhz);}
     }
-    saveMqttConfig(); saveDeepConfig(); saveNtfyConfig(); savePowerSaveConfig();
+    saveMqttConfig(); saveDeepConfig(); saveNtfyConfig(); savePowerSaveConfig(); saveOledConfig();
     mqttStd.disconnect(); mqttAIO.disconnect(); mqttUBI.disconnect();
     mqttStandardConnected=mqttAdafruitConnected=mqttUbidotsConnected=false;
     stdRetries=aioRetries=ubiRetries=0;
@@ -3679,6 +3436,39 @@ void setupOTA() {
     Serial.println(F("[OLED] Pixel exercise cancelled"));
     server.send(200, F("text/html"),
       actionPage("&#x2714;", "Exercise Cancelled", "Display restored.", 3));
+  });
+
+  // /ssaver_preview — force start current or selected preset
+  server.on("/ssaver_preview", HTTP_GET, []() {
+    uint8_t p = ssaverPreset;  // default to saved
+    if (server.hasArg("p")) {
+      int pv = server.arg("p").toInt();
+      if (pv >= 0 && pv <= 2) p = (uint8_t)pv;
+    }
+
+    ssaverSavedPreset = ssaverPreset;
+    ssaverPreset      = p;
+    ssaverActive      = true;
+    ssaverPreview     = true;
+    ssaverStartMs     = millis();
+    ssaverFrameMs     = 0;
+    mxInited          = false;
+    
+    ssResetBall();
+    ssResetMario();
+
+    display.displayOn();
+    display.clear();
+    disableDeepSleepUntil = millis() + 20000UL;
+
+    const char* names[] = { "Bouncing Ball", "Mario Bounce", "Matrix Rain" };
+    Serial.printf("[SAVER] Preview started: %s\n", names[p]);
+
+    server.send(200, F("text/html"),
+      actionPage("&#x2728;", "Screensaver Preview",
+        String(names[p]) + " running for 10 seconds.<br>"
+        "Press device button to dismiss early.",
+        12, "/settings"));
   });
 
   // ── /ota_check — trigger immediate manifest fetch, return JSON status ─────────
@@ -4056,6 +3846,7 @@ void setup() {
 
   // ── ntfy config ──────────────────────────────────────────────────────────────
   loadNtfyConfig();
+ 
 
   // ── Double reset check — BEFORE WiFiManager ────────────────────────────────
   bool forcePortal = detectDoubleReset();
@@ -4063,6 +3854,9 @@ void setup() {
   // ── WiFiManager (blocks here until connected or portal times out) ──────────
   // WDT is NOT started yet — portal can legitimately take 3 minutes.
   setupWiFiManager(forcePortal);
+
+  // ── Oled Ssaver config ───────────────────────────────────────────────────────
+  loadOledConfig(); // ensure latest saved preset is loaded
 
   // ── Apply display state now that WiFi is up ──────────────────────────────────
   // stealthThisWake was computed before ui.init() above.
@@ -4073,6 +3867,7 @@ void setup() {
     Serial.println(F("[DISP] Stealth -- OLED+LED off for this timer wake"));
   } else {
     display.displayOn();
+    lastActivityMs = millis();
   }
 
   // ── WDT: safe to start now that WiFi is connected ─────────────────────────
@@ -4262,12 +4057,274 @@ void setup() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// OLED SCREENSAVER ANIMATIONS
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── Preset 0 — Bouncing Ball ──────────────────────────────────────────────────
+// Single dot with dot-product (angle-of-incidence = angle-of-reflection) physics.
+void ssResetBall() {
+  bbX  = 32 + random(0, 64); bbY  = 16 + random(0, 32);
+  bbVx = 1.2f + random(0, 100) / 180.0f;
+  bbVy = 0.8f + random(0, 100) / 180.0f;
+  if (random(2)) bbVx = -bbVx;
+  if (random(2)) bbVy = -bbVy;
+}
+
+void ssDrawBouncingBall() {
+  if (millis() - ssaverFrameMs < 38) return;   // ~26 fps
+  ssaverFrameMs = millis();
+
+  bbX += bbVx;
+  bbY += bbVy;
+
+  // Reflect velocity component perpendicular to the wall (dot-product style)
+  if (bbX < 2.0f)   { bbX = 2.0f;   bbVx =  fabsf(bbVx); }
+  if (bbX > 125.0f) { bbX = 125.0f; bbVx = -fabsf(bbVx); }
+  if (bbY < 2.0f)   { bbY = 2.0f;   bbVy =  fabsf(bbVy); }
+  if (bbY > 61.0f)  { bbY = 61.0f;  bbVy = -fabsf(bbVy); }
+
+  int bx = (int)bbX, by = (int)bbY;
+  display.clear();
+  // Filled 3×3 core + cross arms for visibility
+  for (int dy = -1; dy <= 1; dy++)
+    for (int dx = -1; dx <= 1; dx++)
+      display.setPixel(bx + dx, by + dy);
+  display.setPixel(bx,     by - 2);
+  display.setPixel(bx,     by + 2);
+  display.setPixel(bx - 2, by);
+  display.setPixel(bx + 2, by);
+  display.drawRect(0, 0, 128, 64);  // visible room border
+  display.display();
+}
+
+// ── Preset 1 — Mario Bounce ───────────────────────────────────────────────────
+// Gravity arc + wall bounces. 9×11 sprite, 2 walk frames, horizontally mirrored
+// when moving left. Sprite is drawn pixel-by-pixel so no bitmap library needed.
+//
+// Sprite layout (9 cols wide, MARIO_W=9):
+//   bit (MARIO_W-1-col) of each row word = pixel at that column.
+//   Rows as 9-bit patterns — comments show the pixel map (.=off, X=on).
+#define MARIO_W 9
+#define MARIO_H 11
+static const uint16_t MARIO_FRAMES[2][MARIO_H] PROGMEM = {
+  { // Frame 0 — stand / left foot forward
+    0b011100000,  // .XXX.....
+    0b011111000,  // .XXXXX...
+    0b111111100,  // XXXXXXX..
+    0b011111000,  // .XXXXX...
+    0b011111000,  // .XXXXX...
+    0b111111100,  // XXXXXXX..
+    0b011111000,  // .XXXXX...
+    0b010001000,  // .X...X...  legs apart
+    0b010001000,  // .X...X...
+    0b110001100,  // XX...XX..  feet
+    0b000000000
+  },
+  { // Frame 1 — right foot forward
+    0b011100000,
+    0b011111000,
+    0b111111100,
+    0b011111000,
+    0b011111000,
+    0b111111100,
+    0b011111000,
+    0b110000100,  // XX....X..  legs shifted
+    0b011001000,  // .XX..X...
+    0b011001100,  // .XX..XX..  feet shifted
+    0b000000000
+  }
+};
+
+void ssResetMario() {
+  mrX = 20; mrY = 30;
+  mrVx = 1.4f + random(0, 80) / 200.0f;
+  mrVy = -3.8f;
+  mrFrame = 0;
+}
+
+void ssDrawMario() {
+  const float GRAVITY    =  0.22f;
+  const float BOUNCE_VY  = -4.5f;
+  const float FLOOR      =  64.0f - MARIO_H - 1;
+
+  if (millis() - mrLastMoveMs < 28) return;   // ~35 fps physics
+  mrLastMoveMs = millis();
+
+  mrVy += GRAVITY;
+  mrX  += mrVx;
+  mrY  += mrVy;
+
+  if (mrY >= FLOOR)           { mrY = FLOOR;           mrVy = BOUNCE_VY;         }
+  if (mrY < 0)                { mrY = 0;               mrVy = fabsf(mrVy)*0.5f;  }
+  if (mrX < 0)                { mrX = 0;               mrVx =  fabsf(mrVx);      }
+  if (mrX > 128 - MARIO_W)    { mrX = 128 - MARIO_W;  mrVx = -fabsf(mrVx);      }
+
+  // Alternate walk frame every 150 ms
+  if (millis() - mrLastFrameMs > 150) {
+    mrLastFrameMs = millis();
+    mrFrame = (mrFrame + 1) & 1;
+  }
+
+  display.clear();
+
+  int ox = (int)mrX, oy = (int)mrY;
+  bool flipX = (mrVx < 0);   // mirror sprite when moving left
+
+  for (int row = 0; row < MARIO_H; row++) {
+    uint16_t bits = pgm_read_word(&MARIO_FRAMES[mrFrame][row]);
+    for (int col = 0; col < MARIO_W; col++) {
+      int srcCol = flipX ? (MARIO_W - 1 - col) : col;
+      if (bits & (1u << (MARIO_W - 1 - srcCol))) {
+        int px = ox + col, py = oy + row;
+        if (px >= 0 && px < 128 && py >= 0 && py < 64)
+          display.setPixel(px, py);
+      }
+    }
+  }
+  display.display();
+}
+
+// ── Preset 2 — Matrix Rain ────────────────────────────────────────────────────
+// 21 falling columns; each column has a "head" pixel block that advances at a
+// random speed and leaves a tapering pixel trail behind it. Columns restart
+// above the screen at random offsets so they never all sync up.
+void ssInitMatrix() {
+  for (int c = 0; c < MX_COLS; c++) {
+    mxHead[c]  = -(int16_t)random(10, 90);   // stagger above screen
+    mxSpeed[c] =  1 + (uint8_t)random(0, 4);
+    mxLen[c]   = 12 + (uint8_t)random(0, 24);
+  }
+  mxInited = true;
+}
+
+void ssDrawMatrix() {
+  if (!mxInited) ssInitMatrix();
+  if (millis() - ssaverFrameMs < 55) return;   // ~18 fps
+  ssaverFrameMs = millis();
+
+  display.clear();
+
+  for (int c = 0; c < MX_COLS; c++) {
+    int xBase = c * MX_COL_PX;
+    int head  = (int)mxHead[c];
+
+    for (int t = 0; t < (int)mxLen[c]; t++) {
+      int py = head - t;
+      if (py < 0 || py >= 64) continue;
+
+      if (t == 0) {
+        // Leading head: 4px wide 2-row bright block
+        for (int dx = 0; dx < 4; dx++) {
+          display.setPixel(xBase + dx, py);
+          if (py > 0) display.setPixel(xBase + dx, py - 1);
+        }
+      } else if (t < 5) {
+        // Near-head trail: 3px wide
+        for (int dx = 0; dx < 3; dx++) display.setPixel(xBase + dx, py);
+      } else if (t < 12) {
+        // Mid trail: 2px wide, skip alternate rows for "character" texture
+        if (t % 2 == 0) for (int dx = 0; dx < 2; dx++) display.setPixel(xBase + dx, py);
+      } else {
+        // Tail: single scatter pixel
+        if ((py + c) % 3 == 0) display.setPixel(xBase, py);
+      }
+    }
+
+    mxHead[c] += mxSpeed[c];
+    // Reset when entire trail has cleared the bottom
+    if (mxHead[c] - (int)mxLen[c] > 64) {
+      mxHead[c]  = -(int16_t)random(5, 70);
+      mxSpeed[c] =  1 + (uint8_t)random(0, 4);
+      mxLen[c]   = 12 + (uint8_t)random(0, 24);
+    }
+  }
+  display.display();
+}
+
+// ── Screensaver dispatcher ────────────────────────────────────────────────────
+// Call every loop() iteration. Activates after idle timeout; any button press
+// (via ssaverResetActivity()) dismisses it instantly.
+void runScreensaver() {
+  // Allow preview to run even when ssaverEnabled is false; only block
+  // auto-activation.  ssaverPreview is only true during an explicit preview
+  // triggered from the web UI, so this is safe.
+  if ((!ssaverEnabled && !ssaverPreview) || stealthThisWake || screenCleanActive) {
+    if (ssaverActive) {
+      ssaverActive = false;
+      display.normalDisplay();
+      display.clear();
+      display.displayOn();
+    }
+    return;
+  }
+
+  unsigned long idleMs = millis() - lastActivityMs;
+
+  // Activate if idle long enough
+  if (!ssaverActive && idleMs >= ssaverTimeoutSecs * 1000UL) {
+    ssaverActive  = true;
+    ssaverPreview = false;
+    ssaverStartMs = millis();
+    ssaverFrameMs = 0;
+    mxInited      = false;
+    
+    ssResetBall();
+    ssResetMario();
+
+    display.displayOn();
+    Serial.printf("[SAVER] Auto-activated preset %u after %lu ms idle\n", 
+                  ssaverPreset, idleMs);
+  }
+
+  if (!ssaverActive) return;
+
+  // Preview timeout
+  if (ssaverPreview && millis() - ssaverStartMs > 10000UL) {
+    ssaverActive = false;
+    ssaverPreview = false;
+    ssaverPreset = ssaverSavedPreset;
+    display.normalDisplay();
+    display.clear();
+    lastActivityMs = millis();
+    Serial.println(F("[SAVER] Preview ended"));
+    return;
+  }
+
+  // Draw current animation
+  switch (ssaverPreset) {
+    case 1:  ssDrawMario();    break;
+    case 2:  ssDrawMatrix();   break;
+    default: ssDrawBouncingBall(); break;
+  }
+}
+
+void ssaverResetActivity() {
+  lastActivityMs = millis();
+  if (ssaverActive) {
+    ssaverActive = false;
+    ssaverPreview = false;
+    display.normalDisplay();
+    display.clear();
+    display.displayOn();
+    Serial.println(F("[SAVER] Dismissed by button"));
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // LOOP
 // ═════════════════════════════════════════════════════════════════════════════
 void loop() {
   esp_task_wdt_reset();  // feed watchdog — must be called regularly
   button.tick();         // process all button events via OneButton
   led.Update();          // advance JLed animation state
+
+  // ── Button activity detection for screensaver ─────────────────────────────
+  static bool lastBtnState = HIGH;
+  bool currentBtnState = digitalRead(BUTTON_PIN);
+  if (currentBtnState == LOW || button.getNumberClicks() > 0) {
+    ssaverResetActivity();
+  }
+  lastBtnState = currentBtnState;
 
   // ── Hold countdown display (globalHoldSeconds drives OLED overlay) ─────────
   // Uses OneButton's internal press duration — no competing digitalRead needed
@@ -4345,8 +4402,25 @@ void loop() {
     }
   }
 
-  // ── Display update (skipped in Stealth or during pixel exercise) ─────────────
-  int budget = (stealthThisWake || screenCleanActive) ? 10 : ui.update();
+  // ── OLED Screensaver ──────────────────────────────────────────────────────
+  runScreensaver();
+  
+  // ── Normal UI Update + Activity Timer ─────────────────────────────────────
+  int budget = 10;   // default delay when screensaver is active
+  
+  if (!stealthThisWake && !screenCleanActive && !ssaverActive) {
+    budget = ui.update();
+    // NOTE: do NOT reset lastActivityMs here — ui.update() returns >= 0 on every
+    // frame, so resetting here would permanently prevent the screensaver from
+    // ever firing.  Idle timer is only reset by real user events (button press,
+    // ssaverResetActivity) and once on boot / display-on in setup().
+  }
+
+  // Extra safety: any button press resets idle timer
+  if (button.getNumberClicks() > 0) {
+    lastActivityMs = millis();
+  }
+  
 
   // ── WiFi health check ──────────────────────────────────────────────────────
   checkWiFi();
