@@ -1,8 +1,8 @@
 {
   "version": "5.30",
-  "build_date": "2026-05-28",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.28/heltec_wifkit32v2_v528_36CB5305_firmware.ino.bin",
-  "size": 1395.7,
-  "crc32": "36CB5305",
+  "build_date": "2026-05-30",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.30/heltec_wifkit32v2_v530_FFD82517_firmware.ino.bin",
+  "size": 1399.0,
+  "crc32": "FFD82517",
   "changelog": "v5.30 ota upload hardened, new screensaver preset added (dvd)  "
 }
