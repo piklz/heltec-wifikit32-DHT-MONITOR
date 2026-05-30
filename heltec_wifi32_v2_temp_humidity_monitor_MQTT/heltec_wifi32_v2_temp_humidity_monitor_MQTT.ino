@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.30
+ * Version:       5.31
  * Last Updated:  2026-05-30
  * License:       MIT
  *
@@ -29,6 +29,19 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.31 — 2026-05-30
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: Trend indicators for temperature and humidity — stock-ticker style.
+ *         Each new sensor reading is compared to the previous one. If the
+ *         change exceeds the dead-band (0.3°C / 0.5% RH) a directional arrow
+ *         is shown; otherwise no arrow is displayed (no noise flicker).
+ *         OLED (drawFrame1): solid ▲/▼ pixel triangle drawn to the right of
+ *         each value using drawLine primitives — no extra flash cost.
+ *         Web dashboard: Unicode ↑/↓ inline next to each value with colours
+ *         that make intuitive sense (temp↑ red, temp↓ blue, hum↑ blue,
+ *         hum↓ orange). Arrow is hidden entirely when trend is stable.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.30 — 2026-05-30
@@ -110,7 +123,7 @@
 //   USB detection: ADC only ever sees VBAT. Charging raises it above ~4.05V.
 //   USB-only / no battery = ADC floats; caught by variance check (isBatFloating).
 // ─────────────────────────────────────────────────────────────────────────────
-#define FW_VERSION            "5.30"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.31"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -413,6 +426,14 @@ static unsigned long dvdFlashMs = 0;
 DHT_Unified dht(DHT_PIN, DHT_TYPE);
 float temperature = 0;
 float humidity    = 0;
+
+// ── Trend tracking — previous reading for up/down arrow indicators ────────────
+// Dead-bands filter ADC noise: arrows only appear on genuine movement.
+// trendTemp/trendHumidity: -1=falling  0=stable  1=rising
+#define TREND_DEAD_TEMP  0.3f   // °C  — ignore changes smaller than this
+#define TREND_DEAD_HUM   0.5f   // %RH — ignore changes smaller than this
+int8_t  trendTemp     = 0;
+int8_t  trendHumidity = 0;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MQTT clients — one per platform
@@ -1228,6 +1249,23 @@ void drawHoldOverlay(ScreenDisplay *d, int16_t x, int16_t y) {
 }
 
 // Frame 1 — live sensor readings
+// ── Trend triangle — draws a small ▲ or ▼ at (tx, ty) using three drawLines.
+// Size: 5 px wide × 4 px tall. trend > 0 = up, < 0 = down, 0 = nothing drawn.
+void drawTrendTriangle(ScreenDisplay *d, int16_t tx, int16_t ty, int8_t trend) {
+  if (trend == 0) return;
+  if (trend > 0) {
+    // ▲ up: apex at top-centre, base at bottom
+    d->drawLine(tx + 2, ty,     tx,     ty + 4);  // left slope
+    d->drawLine(tx + 2, ty,     tx + 4, ty + 4);  // right slope
+    d->drawLine(tx,     ty + 4, tx + 4, ty + 4);  // base
+  } else {
+    // ▼ down: base at top, apex at bottom-centre
+    d->drawLine(tx,     ty,     tx + 4, ty    );  // top base
+    d->drawLine(tx,     ty,     tx + 2, ty + 4);  // left slope
+    d->drawLine(tx + 4, ty,     tx + 2, ty + 4);  // right slope
+  }
+}
+
 void drawFrame1(ScreenDisplay *d, DisplayUiState *s, int16_t x, int16_t y) {
   if (globalHoldSeconds > 0) { drawHoldOverlay(d, x, y); return; }
   d->setTextAlignment(TEXT_ALIGN_LEFT);
@@ -1238,8 +1276,11 @@ void drawFrame1(ScreenDisplay *d, DisplayUiState *s, int16_t x, int16_t y) {
   d->setFont(ArialMT_Plain_16);
   d->drawString(0 + x, 16 + y, "Temp:");
   d->drawString(60 + x, 16 + y, !isnan(temperature) ? String(temperature, 1) + "C" : "---");
+  // Trend triangle sits to the right of the value, vertically centred on the 16px row
+  drawTrendTriangle(d, 113 + x, 20 + y, trendTemp);
   d->drawString(0 + x, 38 + y, "Humid:");
   d->drawString(60 + x, 38 + y, !isnan(humidity)    ? String(humidity, 1)    + "%" : "---");
+  drawTrendTriangle(d, 113 + x, 42 + y, trendHumidity);
 }
 
 // Frame 2 — system info (IP, SSID, RSSI, uptime, sleep countdown)
@@ -1799,10 +1840,11 @@ void publishBootSummary() {
 void readSensor() {
   sensors_event_t ev;
   bool ok = true;
+  float newTemp = NAN, newHum = NAN;
   dht.temperature().getEvent(&ev);
-  if (isnan(ev.temperature)) ok = false; else temperature = ev.temperature;
+  if (isnan(ev.temperature)) ok = false; else newTemp = ev.temperature;
   dht.humidity().getEvent(&ev);
-  if (isnan(ev.relative_humidity)) ok = false; else humidity = ev.relative_humidity;
+  if (isnan(ev.relative_humidity)) ok = false; else newHum = ev.relative_humidity;
 
   if (!ok) {
     Serial.println("[DHT] Read failed — sleep trigger still set");
@@ -1810,6 +1852,21 @@ void readSensor() {
     triggerDeepSleepAfterPublish = true;
     return;
   }
+
+  // ── Trend: compare new vs previous reading, honouring dead-band ─────────────
+  if (!isnan(temperature) && temperature != 0.0f) {
+    float dt = newTemp - temperature;
+    trendTemp = (dt >  TREND_DEAD_TEMP) ?  1 :
+                (dt < -TREND_DEAD_TEMP) ? -1 : 0;
+  }
+  if (!isnan(humidity) && humidity != 0.0f) {
+    float dh = newHum - humidity;
+    trendHumidity = (dh >  TREND_DEAD_HUM) ?  1 :
+                    (dh < -TREND_DEAD_HUM) ? -1 : 0;
+  }
+
+  temperature = newTemp;
+  humidity    = newHum;
   Serial.printf("[DHT] %.1f°C  %.1f%%\n", temperature, humidity);
   {
     struct tm ti; time_t now = 0;
@@ -2642,20 +2699,28 @@ void setupOTA() {
       "<h2>&#x1F4CA; Live Stats</h2>"
       "<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px 16px'>");
 
-    // Temperature with threshold badge
+    // Temperature with threshold badge + trend arrow
     h += F("<div><span style='color:#9e9e9e;font-size:12px'>TEMPERATURE</span><br>"
       "<span style='font-size:26px;font-weight:600;color:");
-    if      (temperature >= sensorTempHi) h += F("#ef5350"); 
-    else if (temperature <= sensorTempLo) h += F("#42a5f5"); 
-    else                                   h += F("#ffffff"); 
+    if      (temperature >= sensorTempHi) h += F("#ef5350");
+    else if (temperature <= sensorTempLo) h += F("#42a5f5");
+    else                                   h += F("#ffffff");
     h += F("'>");
     h += String(temperature,1);
-    h += F("</span><span style='color:#9e9e9e'>&nbsp;&deg;C</span>"
-      "<br><span style='font-size:11px;color:#666'>");
+    h += F("</span><span style='color:#9e9e9e'>&nbsp;&deg;C</span>");
+    // Trend arrow — colour: red=rising, blue=falling, hidden when stable
+    if (trendTemp != 0) {
+      h += F("<span style='font-size:18px;font-weight:700;margin-left:5px;color:");
+      h += (trendTemp > 0) ? F("#ef5350") : F("#42a5f5");
+      h += F("'>");
+      h += (trendTemp > 0) ? F("&#x2191;") : F("&#x2193;");
+      h += F("</span>");
+    }
+    h += F("<br><span style='font-size:11px;color:#666'>");
     h += String(sensorTempLo,1) + "&deg;&#x2193; &nbsp; " + String(sensorTempHi,1) + "&deg;&#x2191;";
     h += F("</span></div>");
 
-    // Humidity with threshold badge
+    // Humidity with threshold badge + trend arrow
     h += F("<div><span style='color:#9e9e9e;font-size:12px'>HUMIDITY</span><br>"
       "<span style='font-size:26px;font-weight:600;color:");
     if      (humidity >= sensorHumHi) h += F("#ef5350");
@@ -2663,8 +2728,16 @@ void setupOTA() {
     else                               h += F("#ffffff");
     h += F("'>");
     h += String(humidity,1);
-    h += F("</span><span style='color:#9e9e9e'>&nbsp;%</span>"
-      "<br><span style='font-size:11px;color:#666'>");
+    h += F("</span><span style='color:#9e9e9e'>&nbsp;%</span>");
+    // Trend arrow — colour: blue=rising (more humid), orange=falling (drying)
+    if (trendHumidity != 0) {
+      h += F("<span style='font-size:18px;font-weight:700;margin-left:5px;color:");
+      h += (trendHumidity > 0) ? F("#42a5f5") : F("#ff9800");
+      h += F("'>");
+      h += (trendHumidity > 0) ? F("&#x2191;") : F("&#x2193;");
+      h += F("</span>");
+    }
+    h += F("<br><span style='font-size:11px;color:#666'>");
     h += String(sensorHumLo,1) + "%&#x2193; &nbsp; " + String(sensorHumHi,1) + "%&#x2191;";
     h += F("</span></div>");
 
