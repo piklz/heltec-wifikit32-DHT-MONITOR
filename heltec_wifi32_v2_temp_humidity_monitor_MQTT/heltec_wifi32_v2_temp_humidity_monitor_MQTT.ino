@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.28
- * Last Updated:  2026-05-28
+ * Version:       5.30
+ * Last Updated:  2026-05-30
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -31,52 +31,37 @@
  *  • Deep sleep support for low-power operation
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.28 — 2026-05-28
+ * CHANGELOG v5.30 — 2026-05-30
  * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: Screensaver idle timeout now works correctly.
- *         Root cause: lastActivityMs was being reset inside the ui.update()
- *         block on every loop iteration (ui.update() always returns >= 0 while
- *         frames are running), so the 30 s countdown could never expire.
- *         Fix: removed that reset entirely — idle timer is now only reset by
- *         real user events (button press / ssaverResetActivity) and once on
- *         boot when the display is turned on.
- *  - FIX: Screensaver preview now works even when ssaverEnabled = false.
- *         runScreensaver() was bailing out at the top guard and immediately
- *         killing the preview.  Guard now passes ssaverPreview through.
- *  - FIX: Preview button in /settings now previews the *currently selected*
- *         dropdown preset without requiring a Save first.  Button uses inline
- *         JS to read the live <select> value and passes it as ?p=N to the
- *         /ssaver_preview route.  Select your preset → click Preview → see it
- *         on the OLED instantly.  Save separately when you're happy.
+ *  - FIX: OTA upload safety — filename validation now enforced server-side.
+ *         Rejects any file not ending in .bin and any .merged. binary before
+ *         a single byte is written to flash (previously JS-only, bypassable).
+ *  - FIX: OTA partition size guard — Update.begin() now called with the actual
+ *         Content-Length so the framework rejects oversized binaries up front
+ *         rather than silently overflowing the OTA partition.
+ *  - NEW: OTA FW_VER marker scan — first 64 KB of every uploaded binary is
+ *         scanned for the embedded "FW_VER:" signature. Upload is aborted if
+ *         the marker is absent, catching wrong-project or corrupt binaries
+ *         before they are committed to flash.
+ *  - NEW: OTA downgrade warning — browser reads the FW_VER marker from the
+ *         binary client-side (sniffVersion) and shows a confirm() dialog if
+ *         the version is older than the running firmware. User can override
+ *         (useful during dev/debug). No save or reload required.
+ *  - FIX: OTA rejection reason now returned in HTTP response body and shown
+ *         on OLED ("FAIL: <reason>") instead of the generic "flash write error".
+ *  - FIX: uploadRejected / uploadRejectReason / uploadMarkerFound /
+ *         uploadBytesScanned promoted to file scope so both the upload handler
+ *         lambda and the completion handler lambda can share them (previously
+ *         caused 'not declared in this scope' compile error).
+ *  - FIX: server.send() ternary type mismatch (F() vs String) resolved by
+ *         building response into a String before passing to send().
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.27 — 2026-05-27
+ * CHANGELOG v5.29 — 2026-05-29
  * ─────────────────────────────────────────────────────────────────────────────
- *  - ADD: OLED screensaver with 3 animated presets:
- *         0 = Bouncing Ball (dot-product physics, 1-pixel ball + halo cross)
- *         1 = Mario Bounce (gravity arc, wall bounce, 9×11 sprite, 2-frame walk
- *             anim, horizontal mirror on direction change)
- *         2 = Matrix Rain (21 falling columns, variable speed/trail, monochrome)
- *  - ADD: /settings screensaver section: enable toggle, idle timeout dropdown
- *         (30s → 1 hr), preset select, and live Preview buttons for each preset.
- *  - ADD: /ssaver_preview?p=N route — starts chosen preset for 10 s overlay
- *         without requiring a settings save first.
- *  - ADD: Any button press dismisses the screensaver instantly (ssaverResetActivity).
- *  - ADD: NVS persistence ("oled" namespace) via loadOledConfig/saveOledConfig.
+ *  - ADDED: Screensaver DVD logo bouncer nostalgia!.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * REQUIRED LIBRARIES
- * ─────────────────────────────────────────────────────────────────────────────
- *  • WiFiManager (tzapu) — WiFi network configuration
- *  • PubSubClient — MQTT protocol support
- *  • DHT + Adafruit Sensor — Temperature/humidity sensing
- *  • ArduinoJson v7 — JSON parsing & serialization
- *  • OneButton — Button handling with multi-tap detection
- *  • JLed — LED animation effects
- *  • HTTPClient (built-in) — HTTP requests & OTA
- *  • Heltec Board Package — Hardware-specific libraries
  *
- * ─────────────────────────────────────────────────────────────────────────────
  */
 
 
@@ -125,7 +110,7 @@
 //   USB detection: ADC only ever sees VBAT. Charging raises it above ~4.05V.
 //   USB-only / no battery = ADC floats; caught by variance check (isBatFloating).
 // ─────────────────────────────────────────────────────────────────────────────
-#define FW_VERSION            "5.28"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.30"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -149,6 +134,10 @@ static const char FW_VER_MARKER[] = "FW_VER:" FW_VERSION;
 bool     otaUpdateAvailable = false;
 bool     otaCheckDone       = false;   // set after first check this wake
 bool     otaDismissed       = false;   // user clicked Dismiss on dashboard
+static bool     uploadRejected      = false;   // set on any pre-flash check failure
+static String   uploadRejectReason  = "";
+static bool     uploadMarkerFound   = false;   // FW_VER: marker seen in binary
+static uint32_t uploadBytesScanned  = 0;       // bytes searched for marker so far
 String   otaNewVersion      = "";
 String   otaDownloadUrl     = "";
 String   otaCrc32Expected   = "";      // uppercase hex 8-char
@@ -363,7 +352,7 @@ int      globalSleepCountdown = 0;   // >0: imminent-sleep overlay (3..2..1 befo
 // ── OLED Screensaver ──────────────────────────────────────────────────────START
 bool     ssaverEnabled     = false;  // master on/off
 uint32_t ssaverTimeoutSecs = 60;     // idle seconds before activation
-uint8_t  ssaverPreset      = 0;      // 0=Bouncing Ball  1=Mario  2=Matrix Rain
+uint8_t  ssaverPreset      = 0;      // 0=Bouncing Ball  1=Mario  2=Matrix Rain  3=DVD Logo
 bool     ssaverActive      = false;  // screensaver currently running
 bool     ssaverPreview     = false;  // preview mode — auto-exits after 10 s
 uint8_t  ssaverSavedPreset = 0;      // preset stored before a preview overrides it
@@ -383,6 +372,39 @@ static int16_t mxHead[MX_COLS];
 static uint8_t mxSpeed[MX_COLS];
 static uint8_t mxLen[MX_COLS];
 static bool    mxInited = false;
+// DVD Logo Bounce state
+// Real 56×26 px bitmap traced from the DVD logo — drawXbm renders it directly.
+// Bounce area: 72 px wide × 38 px tall on the 128×64 OLED.
+#define DVD_LOGO_W  56
+#define DVD_LOGO_H  26
+static const uint8_t DVD_LOGO[] PROGMEM = {
+  0xE0, 0xFF, 0xFF, 0x01, 0xF8, 0xFF, 0x03, 0xE0,
+  0xFF, 0xFF, 0x03, 0xFC, 0xFF, 0x1F, 0xF0, 0xFF,
+  0xFF, 0x03, 0xFE, 0xFF, 0x3F, 0x00, 0xE0, 0xFF,
+  0x03, 0x3E, 0x00, 0x7F, 0x00, 0x80, 0xFF, 0x07,
+  0x1F, 0x00, 0xFC, 0xF0, 0x01, 0xDF, 0x87, 0xDF,
+  0x07, 0xFC, 0xF8, 0x01, 0xDF, 0xC7, 0xCF, 0x07,
+  0xFC, 0xF8, 0x00, 0x9F, 0xCF, 0xC7, 0x07, 0xFC,
+  0xF8, 0x80, 0x9F, 0xEF, 0xE3, 0x07, 0x7C, 0xF8,
+  0x80, 0x8F, 0xFF, 0xE1, 0x07, 0x7E, 0xF8, 0xE0,
+  0x0F, 0xFF, 0xE0, 0x03, 0x3F, 0xFC, 0xFE, 0x03,
+  0xFF, 0xE0, 0xF7, 0x1F, 0xFC, 0xFF, 0x01, 0x7F,
+  0xE0, 0xFF, 0x07, 0xFC, 0x7F, 0x00, 0x3E, 0xF0,
+  0xFF, 0x01, 0xFC, 0x07, 0x00, 0x1E, 0xF0, 0x1F,
+  0x00, 0x00, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0xFF, 0xFF, 0x1F, 0x00, 0x00, 0x80, 0xFF, 0xFF,
+  0xFF, 0xFF, 0x3F, 0x00, 0xFC, 0xFF, 0xFF, 0xFF,
+  0xFF, 0xFF, 0x03, 0xFF, 0xFF, 0x0F, 0x80, 0xFF,
+  0xFF, 0x0F, 0xFF, 0xFF, 0x0F, 0x80, 0xFF, 0xFF,
+  0x0F, 0xFC, 0xFF, 0xFF, 0xF8, 0xFF, 0xFF, 0x07,
+  0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F, 0x00, 0x00,
+  0xC0, 0xFF, 0xFF, 0x3F, 0x00, 0x00
+};
+static float dvdX = 10, dvdY = 10, dvdVx = 1.3f, dvdVy = 0.9f;
+static bool  dvdCornerFlash = false;
+static unsigned long dvdFlashMs = 0;
 // ── OLED Screensaver ──────────────────────────────────────────────────────END
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -660,7 +682,7 @@ void loadOledConfig() {
   ssaverTimeoutSecs = preferences.getUInt ("ss_timeout", 60);
   ssaverPreset      = preferences.getUChar("ss_preset",  0);
   preferences.end();
-  if (ssaverPreset > 2)          ssaverPreset      = 0;
+  if (ssaverPreset > 3)          ssaverPreset      = 0;
   if (ssaverTimeoutSecs < 10)    ssaverTimeoutSecs = 10;
 }
 
@@ -2035,6 +2057,7 @@ function checkNow(){
   }).catch(function(){el.innerHTML='<span style="color:#ef9a9a">&#x274C; Check failed &mdash; is WiFi connected?</span>';});
 }
 // CRC32 table
+var CURRENT_VER="%FW_VERSION%";
 var crcTable=(function(){var t=[];for(var n=0;n<256;n++){var c=n;for(var k=0;k<8;k++)c=(c&1)?0xEDB88320^(c>>>1):c>>>1;t[n]=c;}return t;})();
 function crc32(buf){var crc=0xFFFFFFFF;var u8=new Uint8Array(buf);for(var i=0;i<u8.length;i++)crc=(crc>>>8)^crcTable[(crc^u8[i])&0xFF];return((crc^0xFFFFFFFF)>>>0).toString(16).toUpperCase().padStart(8,'0');}
 
@@ -2118,6 +2141,17 @@ f.onsubmit=async function(e){
   if(!x){alert('Select a firmware file first.');return;}
   if(!x.name.endsWith('.bin')){alert('File must end in .bin');return;}
   if(x.name.toLowerCase().includes('.merged.')){alert('Do not use merged binaries. Export Compiled Binary from Arduino IDE instead.');return;}
+  // ── Downgrade warning ──────────────────────────────────────────────────────
+  var sniffedVer = nv.textContent.replace(/^v/,'').trim();
+  if(sniffedVer && sniffedVer!=='unknown' && sniffedVer!=='—'){
+    var cv=CURRENT_VER.split('.').map(Number), sv=sniffedVer.split('.').map(Number);
+    var isDowngrade=(sv[0]<cv[0])||(sv[0]===cv[0]&&sv[1]<cv[1]);
+    if(isDowngrade && !confirm(
+      '⚠️ Downgrade detected\n\n'+
+      'You are flashing v'+sniffedVer+' over the current v'+CURRENT_VER+'.\n\n'+
+      'This is fine for development/testing.\nContinue?'
+    )) return;
+  }
   var fd=new FormData();fd.append('update',x);
   ub.disabled=true;pc.style.display='block';st.style.display='none';cd.textContent='';
   var xhr=new XMLHttpRequest(),t0=Date.now();
@@ -2889,9 +2923,11 @@ void setupOTA() {
     // Completion handler — fires after all file chunks have been written
     []() {
       esp_task_wdt_reset();
-      bool ok = !Update.hasError();
+      bool ok = !Update.hasError() && !uploadRejected;
       server.sendHeader(F("Connection"), F("close"));
-      server.send(200, F("text/plain"), ok ? F("OK") : F("FAIL"));
+      String response = ok ? String("OK")
+        : String("FAIL: ") + (uploadRejected ? uploadRejectReason : String("flash write error"));
+      server.send(200, F("text/plain"), response);
 
       // Restore normal WDT timeout (was boosted to 120s during upload)
       esp_task_wdt_config_t normalCfg = {
@@ -2936,8 +2972,12 @@ void setupOTA() {
           }
         } else {
           display.setFont(ArialMT_Plain_10);
-          display.drawString(64, 20, "Check .ino.bin file");
-          display.drawString(64, 34, "Not .merged.bin");
+          String reason = uploadRejected ? uploadRejectReason : "Flash write error";
+          // Wrap reason at 21 chars per line for the 128px OLED
+          display.drawString(64, 16, reason.length() > 21 ? reason.substring(0,21) : reason);
+          if (reason.length() > 21)
+            display.drawString(64, 28, reason.substring(21, min((int)reason.length(), 42)));
+          display.drawString(64, 44, "Update rejected");
           display.display();
           delay(5000);
         }
@@ -2960,11 +3000,17 @@ void setupOTA() {
     // Upload handler — called for each HTTP chunk during the file transfer
     []() {
       HTTPUpload &u = server.upload();
-      static uint32_t uploadCrcState    = 0;
-      static uint32_t uploadExpectedSize = 0;
+      static uint32_t uploadCrcState     = 0;
+      static uint32_t uploadExpectedSize  = 0;
+
 
       if (u.status == UPLOAD_FILE_START) {
-        uploadCrcState = 0xFFFFFFFF;
+        // Reset all per-upload state
+        uploadCrcState    = 0xFFFFFFFF;
+        uploadRejected    = false;
+        uploadRejectReason= "";
+        uploadMarkerFound = false;
+        uploadBytesScanned= 0;
         Serial.printf("[OTA] Start: %s\n", u.filename.c_str());
 
         // ── Boost WDT to 120s for the duration of the upload ────────────────
@@ -2977,11 +3023,35 @@ void setupOTA() {
         esp_task_wdt_reset();
 
         // Capture Content-Length so WRITE handler can show a % progress bar.
-        // Multipart boundary adds ~200 bytes overhead — negligible vs ~1.4MB binary.
         uploadExpectedSize = (uint32_t)server.header("Content-Length").toInt();
 
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-          Update.printError(Serial);
+        // ── Filename validation ──────────────────────────────────────────────
+        String fn = u.filename; fn.toLowerCase();
+        if (!u.filename.endsWith(".bin")) {
+          Serial.println(F("[OTA] Rejected: filename must end in .bin"));
+          uploadRejected     = true;
+          uploadRejectReason = "Filename must end in .bin";
+        } else if (fn.indexOf(".merged.") >= 0) {
+          Serial.println(F("[OTA] Rejected: merged binary not allowed"));
+          uploadRejected     = true;
+          uploadRejectReason = "Merged binary (.merged.) not allowed — use .ino.bin";
+        }
+
+        // ── Partition size guard ─────────────────────────────────────────────
+        // Pass the known file size to Update.begin() so the framework rejects
+        // oversized binaries before a single byte is written to flash.
+        // Falls back to UPDATE_SIZE_UNKNOWN only if Content-Length was absent.
+        uint32_t beginSize = (uploadExpectedSize > 0 && uploadExpectedSize < 0xFFFFFF00U)
+                           ? uploadExpectedSize : UPDATE_SIZE_UNKNOWN;
+        if (!uploadRejected) {
+          if (!Update.begin(beginSize)) {
+            Serial.print(F("[OTA] Update.begin failed: "));
+            Update.printError(Serial);
+            uploadRejected     = true;
+            uploadRejectReason = beginSize != UPDATE_SIZE_UNKNOWN
+              ? "Binary too large for OTA partition"
+              : "Update.begin() failed — check flash layout";
+          }
         }
         if (!stealthThisWake) {
           display.displayOn();
@@ -3000,6 +3070,37 @@ void setupOTA() {
       } else if (u.status == UPLOAD_FILE_WRITE) {
         // ── Feed WDT unconditionally before every flash write ────────────────
         esp_task_wdt_reset();
+
+        // ── Early-reject: previous check failed, abort and drain ─────────────
+        if (uploadRejected) {
+          Update.abort();
+          return;  // drain remaining HTTP chunks without writing
+        }
+
+        // ── FW_VER marker scan (first 64 KB only) ────────────────────────────
+        // FW_VER_MARKER ("FW_VER:5.29") lives in .rodata, always within first
+        // 64 KB of the binary.  If we exhaust 64 KB without finding it the
+        // binary is either corrupt or from a completely different project.
+        if (!uploadMarkerFound && uploadBytesScanned < 65536) {
+          const uint8_t* b  = u.buf;
+          const size_t   sz = u.currentSize;
+          const char*    mk = "FW_VER:";
+          const size_t   ml = 7;
+          for (size_t i = 0; i + ml <= sz && !uploadMarkerFound; i++) {
+            bool hit = true;
+            for (size_t j = 0; j < ml && hit; j++)
+              hit = (b[i+j] == (uint8_t)mk[j]);
+            if (hit) uploadMarkerFound = true;
+          }
+          uploadBytesScanned += u.currentSize;
+          if (!uploadMarkerFound && uploadBytesScanned >= 65536) {
+            Serial.println(F("[OTA] Rejected: FW_VER marker not found in first 64 KB"));
+            Update.abort();
+            uploadRejected     = true;
+            uploadRejectReason = "Not a valid firmware for this device (FW_VER marker missing)";
+            return;
+          }
+        }
 
         if (Update.write(u.buf, u.currentSize) != u.currentSize) {
           Update.printError(Serial);
@@ -3287,6 +3388,7 @@ void setupOTA() {
     "<option value='0'"); if (ssaverPreset==0) h+=F(" selected"); h+=F(">&#x26AA; Bouncing Ball</option>"
     "<option value='1'"); if (ssaverPreset==1) h+=F(" selected"); h+=F(">&#x1F344; Mario Bounce</option>"
     "<option value='2'"); if (ssaverPreset==2) h+=F(" selected"); h+=F(">&#x1F7E9; Matrix Rain</option>"
+    "<option value='3'"); if (ssaverPreset==3) h+=F(" selected"); h+=F(">&#x1F4BF; DVD Bounce</option>"    
     "</select>"
 
     "<div style='margin:12px 0 8px 0'>"
@@ -3337,7 +3439,7 @@ void setupOTA() {
     }
     if (server.hasArg("ss_preset")) {
       uint8_t sp = (uint8_t)server.arg("ss_preset").toInt();
-      if (sp <= 2) ssaverPreset = sp;
+      if (sp <= 3) ssaverPreset = sp;
     }
     // Force reload to make sure variables are in sync
     saveOledConfig();
@@ -3443,7 +3545,7 @@ void setupOTA() {
     uint8_t p = ssaverPreset;  // default to saved
     if (server.hasArg("p")) {
       int pv = server.arg("p").toInt();
-      if (pv >= 0 && pv <= 2) p = (uint8_t)pv;
+      if (pv >= 0 && pv <= 3) p = (uint8_t)pv;
     }
 
     ssaverSavedPreset = ssaverPreset;
@@ -3461,7 +3563,7 @@ void setupOTA() {
     display.clear();
     disableDeepSleepUntil = millis() + 20000UL;
 
-    const char* names[] = { "Bouncing Ball", "Mario Bounce", "Matrix Rain" };
+    const char* names[] = { "Bouncing Ball", "Mario Bounce", "Matrix Rain", "DVD Logo" };
     Serial.printf("[SAVER] Preview started: %s\n", names[p]);
 
     server.send(200, F("text/html"),
@@ -4239,6 +4341,55 @@ void ssDrawMatrix() {
     }
   }
   display.display();
+  
+}
+// ── Preset 3 — DVD Logo Bounce ────────────────────────────────────────────────
+// Faithful recreation of the classic 2000s DVD player idle screensaver.
+// A "DVD" badge (text + border rect) bounces perfectly around the screen.
+// Corner hit: brief hardware invert flash — the moment everyone waits for.
+
+void ssResetDvd() {
+  dvdX  = 5.0f + random(0, 60);
+  dvdY  = 2.0f + random(0, 20);
+  dvdVx = 1.1f + random(0, 80) / 160.0f;
+  dvdVy = 0.7f + random(0, 80) / 160.0f;
+  if (random(2)) dvdVx = -dvdVx;
+  if (random(2)) dvdVy = -dvdVy;
+  dvdCornerFlash = false;
+}
+
+void ssDrawDvd() {
+  if (millis() - ssaverFrameMs < 40) return;   // ~25 fps
+  ssaverFrameMs = millis();
+
+  const float MAX_X = 128.0f - DVD_LOGO_W;
+  const float MAX_Y =  64.0f - DVD_LOGO_H;
+
+  bool hitX = false, hitY = false;
+
+  dvdX += dvdVx;
+  dvdY += dvdVy;
+
+  if (dvdX <= 0.0f)  { dvdX = 0.0f;  dvdVx =  fabsf(dvdVx); hitX = true; }
+  if (dvdX >= MAX_X) { dvdX = MAX_X; dvdVx = -fabsf(dvdVx); hitX = true; }
+  if (dvdY <= 0.0f)  { dvdY = 0.0f;  dvdVy =  fabsf(dvdVy); hitY = true; }
+  if (dvdY >= MAX_Y) { dvdY = MAX_Y; dvdVy = -fabsf(dvdVy); hitY = true; }
+
+  // Corner hit — the legendary moment — brief hardware invert flash
+  if (hitX && hitY) {
+    dvdCornerFlash = true;
+    dvdFlashMs     = millis();
+    display.invertDisplay();
+    Serial.println(F("[SAVER] DVD corner hit!"));
+  }
+  if (dvdCornerFlash && millis() - dvdFlashMs > 150) {
+    dvdCornerFlash = false;
+    display.normalDisplay();
+  }
+
+  display.clear();
+  display.drawXbm((int)dvdX, (int)dvdY, DVD_LOGO_W, DVD_LOGO_H, DVD_LOGO);
+  display.display();
 }
 
 // ── Screensaver dispatcher ────────────────────────────────────────────────────
@@ -4270,6 +4421,7 @@ void runScreensaver() {
     
     ssResetBall();
     ssResetMario();
+    ssResetDvd();
 
     display.displayOn();
     Serial.printf("[SAVER] Auto-activated preset %u after %lu ms idle\n", 
@@ -4292,9 +4444,10 @@ void runScreensaver() {
 
   // Draw current animation
   switch (ssaverPreset) {
-    case 1:  ssDrawMario();    break;
-    case 2:  ssDrawMatrix();   break;
-    default: ssDrawBouncingBall(); break;
+    case 1:  ssDrawMario();         break;
+    case 2:  ssDrawMatrix();        break;
+    case 3:  ssDrawDvd();           break;
+    default: ssDrawBouncingBall();  break;
   }
 }
 
