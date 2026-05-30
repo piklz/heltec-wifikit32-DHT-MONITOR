@@ -1,8 +1,8 @@
 {
   "version": "5.31",
   "build_date": "2026-05-30",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.30/heltec_wifkit32v2_v530_FFD82517_firmware.ino.bin",
-  "size": 1399.0,
-  "crc32": "FFD82517",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.31/heltec_wifkit32v2_v531_EC5EC46A_firmware.ino.bin",
+  "size": 1399.7,
+  "crc32": "EC5EC46A",
   "changelog": "v5.31 trend indicators added,prev:ota upload hardened,screensaver preset added (dvd)  "
 }
