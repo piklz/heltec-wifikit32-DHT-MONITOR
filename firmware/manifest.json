@@ -1,8 +1,8 @@
 {
   "version": "5.28",
-  "build_date": "2026-05-26",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.26/heltec_wifkit32v2_v526_D62A5510_firmware.ino.bin",
-  "size": 1389.9,
-  "crc32": "D62A5510",
+  "build_date": "2026-05-28",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.28/heltec_wifkit32v2_v528_36CB5305_firmware.ino.bin",
+  "size": 1395.7,
+  "crc32": "36CB5305",
   "changelog": "v5.28 fixed screensaver not working after time set  "
 }
