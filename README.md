@@ -1,4 +1,4 @@
-# 🛰️ heltec-wifi-kit32 (v2)
+
 ## DHT + onboard battery monitor logger 
 ### timer based multiple readings (ntfy/mqtt) + web Portal for config
 
@@ -10,8 +10,10 @@
 # Heltec WiFi Kit 32 V2 — Temperature & Humidity + Battery MQTT Monitor
 
 A production-grade IoT firmware for the Heltec WiFi Kit 32 V2 (ESP32).  
-Reads temperature and humidity from a DHT22, publishes over MQTT, and exposes a full web dashboard — all self-contained on the device.
-
+Reads temperature and humidity from a DHT22, publishes over MQTT, and exposes 
+a full web dashboard — all self-contained on the device.
+<img width="320" height="166" alt="20260531_193225   w (Phone)" src="https://github.com/user-attachments/assets/490fc011-630f-4827-b02a-3f2033a771ec" />
+# 🛰️ heltec-wifi-kit32 (v2)
 ---
 
 ## Hardware
