@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.31
- * Last Updated:  2026-05-30
+ * Version:       5.32
+ * Last Updated:  2026-05-31
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,29 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.32 — 2026-05-31
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Forward declarations added for ssResetBall() and ssResetMario() to
+ *         resolve 'not declared in this scope' compile errors caused by their
+ *         use inside lambdas in setupOTA() which precedes their definitions.
+ *  - NEW: Running firmware CRC32 computed at boot from flash partition and
+ *         displayed in brackets next to current version on the OTA page.
+ *         Uses the same ISO-HDLC CRC32 polynomial as the manifest + upload
+ *         checker so values are directly comparable.
+ *  - NEW: /ota_check JSON now includes "running_crc32" so the browser can
+ *         compare running vs GitHub binary without a page reload.
+ *  - NEW: CRC mismatch detection on Check Updates — if version matches but
+ *         CRC32 differs (silent rebuild without version bump), an amber warning
+ *         box appears showing both CRC values plus the manifest changelog as a
+ *         hint. A Re-flash from GitHub button hits /ota_reinstall which
+ *         re-applies the same version from GitHub, bypassing the version-newer
+ *         guard used by the normal update flow.
+ *  - NEW: Matrix Rain screensaver now renders actual characters via
+ *         ArialMT_Plain_10 rather than pixel blocks. Head glyph re-randomises
+ *         every frame; trail cells mutate one glyph per frame matching the
+ *         subtle character-swap visible in the film.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.31 — 2026-05-30
@@ -83,6 +106,7 @@
 #include <esp_sleep.h>
 #include <esp_wifi.h>       // esp_wifi_stop() for guaranteed radio power-down
 #include <esp_bt.h>         // esp_bt_controller_disable() for guaranteed BT off
+#include <esp_ota_ops.h>    // esp_ota_get_running_partition() for running CRC32
 
 // ── Display ───────────────────────────────────────────────────────────────────
 #include <Wire.h>
@@ -123,7 +147,7 @@
 //   USB detection: ADC only ever sees VBAT. Charging raises it above ~4.05V.
 //   USB-only / no battery = ADC floats; caught by variance check (isBatFloating).
 // ─────────────────────────────────────────────────────────────────────────────
-#define FW_VERSION            "5.31"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.32"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -154,6 +178,7 @@ static uint32_t uploadBytesScanned  = 0;       // bytes searched for marker so f
 String   otaNewVersion      = "";
 String   otaDownloadUrl     = "";
 String   otaCrc32Expected   = "";      // uppercase hex 8-char
+String   runningCrc32       = "";      // CRC32 of the running sketch, computed once in setup()
 uint32_t otaFileSize        = 0;
 String   otaChangelog       = "";
 String   otaBuildDate       = "";
@@ -2031,7 +2056,7 @@ h1{color:#64B5F6;margin-bottom:4px;font-size:24px}.subtitle{color:#9e9e9e;margin
 <h1>&#x1F680; Firmware Update</h1>
 <div class='subtitle'>%DEVICE_NAME%</div>
 <div class='fw-row'>
-  <div><div class='fw-label'>Current Version</div><div class='fw-val'>v%FW_VERSION%</div></div>
+  <div><div class='fw-label'>Current Version</div><div class='fw-val'>v%FW_VERSION% <span style='font-size:11px;color:#546e7a'>[%RUNNING_CRC32%]</span></div></div>
   <div class='arrow'>&#x2192;</div>
   <div><div class='fw-label'>New Version</div><div class='fw-val fw-new' id='nv'>—</div></div>
   <div style='flex:1'></div>
@@ -2120,8 +2145,29 @@ function checkNow(){
         +'</div>';
       ib.style.display='block';
     } else {
-      el.innerHTML='<span style="color:#66bb6a">&#x2714; Up to date (v'+d.current+')</span>';
-      ib.style.display='none';
+      var crcMismatch = d.crc32.length===8 && d.running_crc32.length===8
+                        && d.crc32.toUpperCase() !== d.running_crc32.toUpperCase();
+      if (crcMismatch) {
+        el.innerHTML='<span style="color:#ff8a65">&#x26A0; v'+d.current+' &mdash; CRC mismatch</span>';
+        ib.innerHTML=
+          '<div style="background:#2d1f0e;border:2px solid #ff8a65;border-radius:8px;padding:14px;margin-top:12px">'
+          +'<div style="color:#ff8a65;font-weight:700;font-size:14px;margin-bottom:6px">&#x26A0; Same version, different binary</div>'
+          +'<div style="color:#9e9e9e;font-size:12px;margin-bottom:8px">Running firmware CRC32 does not match the GitHub release. '
+          +'The binary may have been rebuilt without a version bump.</div>'
+          +(d.changelog?'<div style="background:#1a1200;border-radius:4px;padding:8px 10px;font-size:12px;color:#ffe082;margin-bottom:10px">'
+          +'<span style="color:#546e7a">Changelog: </span>'+d.changelog+'</div>':'')
+          +'<div style="background:#1a1200;border-radius:4px;padding:8px 12px;font-family:monospace;font-size:12px;margin-bottom:12px">'
+          +'<div><span style="color:#546e7a">Running CRC32 : </span><span style="color:#ef9a9a">'+d.running_crc32+'</span></div>'
+          +'<div><span style="color:#546e7a">GitHub CRC32  : </span><span style="color:#4db6ac">'+d.crc32+'</span></div>'
+          +'</div>'
+          +'<a href="/ota_reinstall" style="background:#ff8a65;color:#000;padding:10px 22px;border-radius:6px;'
+          +'font-weight:700;font-size:14px;text-decoration:none">&#x1F504; Re-flash from GitHub</a>'
+          +'</div>';
+        ib.style.display='block';
+      } else {
+        el.innerHTML='<span style="color:#66bb6a">&#x2714; Up to date (v'+d.current+')</span>';
+        ib.style.display='none';
+      }
     }
   }).catch(function(){el.innerHTML='<span style="color:#ef9a9a">&#x274C; Check failed &mdash; is WiFi connected?</span>';});
 }
@@ -2637,6 +2683,12 @@ void showOtaBootSplash(const String& prevVer) {
   Serial.println(F("[OTA-SPLASH] Done"));
 }
 
+// ── Forward declarations — screensaver reset functions called inside lambdas
+// in setupOTA() which precedes their definitions. Arduino's auto-prototype
+// generator does not forward-declare functions referenced inside lambdas.
+void ssResetBall();
+void ssResetMario();
+
 void setupOTA() {
   // ── Dashboard ──────────────────────────────────────────────────────────────
   server.on("/", HTTP_GET, []() {
@@ -2965,6 +3017,7 @@ void setupOTA() {
     String h = OTA_HTML;
     h.replace("%DEVICE_NAME%", device_name);
     h.replace("%FW_VERSION%",  FW_VERSION);
+    h.replace("%RUNNING_CRC32%", runningCrc32.length() ? runningCrc32 : "—");
 
     // Inject remote firmware info block — shown when manifest check has result
     String remoteBlock = "";
@@ -2999,7 +3052,18 @@ void setupOTA() {
       remoteBlock =
         "<div style='background:#1b3a1b;border:1px solid #2e7d32;border-radius:8px;"
         "padding:10px 14px;margin:14px 0;font-size:13px;color:#81c784'>"
-        "&#x2705; v" + String(FW_VERSION) + " is the latest version</div>";
+        "&#x2705; v" + String(FW_VERSION) + " is the latest version"
+        + (otaCrc32Expected.length()
+            ? "<div style='margin-top:6px;font-size:11px;color:#546e7a'>"
+              "Running CRC32: <span style='color:#4db6ac'>"
+              + (runningCrc32.length() ? runningCrc32 : "—") +
+              "</span>&nbsp;&nbsp;|&nbsp;&nbsp;"
+              "GitHub CRC32: <span style='color:"
+              + (runningCrc32.length() && runningCrc32 == otaCrc32Expected
+                  ? "#4db6ac'>&#x2714; " : "#ff8a65'>&#x26A0; ")
+              + otaCrc32Expected + "</span></div>"
+            : "")
+        + "</div>";
     }
     h.replace("%REMOTE_INFO%", remoteBlock);
     server.send(200, F("text/html"), h);
@@ -3669,9 +3733,42 @@ void setupOTA() {
              "\"changelog\":\"" + otaChangelog + "\","
              "\"build_date\":\"" + otaBuildDate + "\","
              "\"size\":" + String(otaFileSize) + ","
-             "\"crc32\":\"" + otaCrc32Expected + "\"}";
+             "\"crc32\":\"" + otaCrc32Expected + "\","
+             "\"running_crc32\":\"" + runningCrc32 + "\"}";
              
   server.send(200, F("application/json"), j);
+  });
+
+  // ── /ota_reinstall — re-flash same version from GitHub (CRC mismatch recovery)
+  // Skips the otaUpdateAvailable version guard — only requires a valid download URL.
+  server.on("/ota_reinstall", HTTP_GET, []() {
+    if (otaDownloadUrl.length() == 0) {
+      server.send(400, F("text/plain"), F("No download URL — run Check Updates first."));
+      return;
+    }
+    String h = String(F("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Re-flashing</title>"))
+      + F("<meta http-equiv='refresh' content='60;url=/'>"
+        "<style>body{background:#1a1a1a;color:#e0e0e0;font-family:sans-serif;"
+        "display:flex;align-items:center;justify-content:center;min-height:100vh}"
+        ".b{background:#2d2d2d;border-radius:12px;padding:36px;text-align:center;max-width:400px}"
+        "h2{color:#ff8a65}p{color:#9e9e9e;margin:8px 0}</style></head>"
+        "<body><div class='b'>"
+        "<div style='font-size:48px'>&#x1F504;</div>"
+        "<h2>Re-flashing v")
+      + String(FW_VERSION)
+      + F("</h2><p>CRC mismatch detected &mdash; downloading clean binary from GitHub.</p>"
+        "<p>OLED shows live progress. Device will reboot when done.</p>"
+        "<p style='color:#ef9a9a;font-size:12px'>Do not power off during install.</p>"
+        "</div></body></html>");
+    server.send(200, F("text/html"), h);
+    delay(200);
+    bool ok = installOtaFromUrl(otaDownloadUrl, otaCrc32Expected, otaFileSize);
+    if (ok) {
+      Serial.println(F("[OTA] Re-flash complete — rebooting"));
+      delay(500); ESP.restart();
+    } else {
+      Serial.println(F("[OTA] Re-flash FAILED"));
+    }
   });
 
   // ── /ota_dismiss — user dismissed the update banner ───────────────────────
@@ -3907,12 +4004,36 @@ void setupOTA() {
   Serial.println(F("[Web] Server started"));
   Serial.print(F("[Web] http://")); Serial.println(WiFi.localIP().toString());
 }
+
 void setup() {
   Serial.begin(115200);
   printResetReason();
 
   // ── CRC32 lookup table — built once, used by OTA upload + GitHub install ──
   buildCrc32Table();
+  // Compute CRC32 of the running sketch from flash — done once at boot.
+  // Uses the same ISO-HDLC polynomial as the OTA upload checker and manifest.
+  {
+    const esp_partition_t* part = esp_ota_get_running_partition();
+    if (part) {
+      uint32_t crc       = 0xFFFFFFFF;
+      uint8_t  buf[256];
+      size_t   remaining = ESP.getSketchSize();
+      size_t   offset    = 0;
+      while (remaining > 0) {
+        size_t chunk = min(remaining, sizeof(buf));
+        esp_partition_read(part, offset, buf, chunk);
+        crc = crc32Feed(crc, buf, chunk);
+        offset    += chunk;
+        remaining -= chunk;
+      }
+      crc ^= 0xFFFFFFFF;
+      char hex[9];
+      snprintf(hex, sizeof(hex), "%08X", crc);
+      runningCrc32 = String(hex);
+      Serial.printf("[BOOT] Running firmware CRC32: %s\n", hex);
+    }
+  }
 
   //To guarantee the compiler doesn't throw this variable away during optimization
   Serial.println(fw_binary_signature);
