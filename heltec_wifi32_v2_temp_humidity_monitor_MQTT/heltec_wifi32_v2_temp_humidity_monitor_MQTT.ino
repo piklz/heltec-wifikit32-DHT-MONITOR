@@ -378,13 +378,25 @@ static float bbX = 32, bbY = 16, bbVx = 1.7f, bbVy = 1.1f;
 static float  mrX = 20, mrY = 30, mrVx = 1.5f, mrVy = 0.0f;
 static uint8_t mrFrame = 0;
 static unsigned long mrLastMoveMs = 0, mrLastFrameMs = 0;
+
 // Matrix Rain state
-#define MX_COLS   21   // 21 × 6 px ≈ 126 px wide
-#define MX_COL_PX  6
+#define MX_COLS    21    // 21 columns × 6 px = 126 px wide
+#define MX_COL_PX   6   // pixels per column (matches ArialMT_Plain_10 glyph width)
+#define MX_ROWS     8   // 64 px / 8 px per glyph = 8 character rows
 static int16_t mxHead[MX_COLS];
 static uint8_t mxSpeed[MX_COLS];
 static uint8_t mxLen[MX_COLS];
+// Per-cell characters — glyphs are randomised on init and mutate slowly each frame.
+static char    mxChar[MX_COLS][MX_ROWS];
 static bool    mxInited = false;
+// Characters that visually resemble the Matrix katakana font at 6×8 pixels
+static const char MX_CHARSET[] =
+  "0123456789"    // digits
+  "+-*=|:<>!?"    // angular/symmetric symbols
+  "#@$%^&~"       // dense/complex glyphs
+  "TZIJL"         // strong verticals / horizontals
+  "/\\[]{}";      // bracket forms echo ｢ ｣ ｦ marks
+
 // DVD Logo Bounce state
 // Real 56×26 px bitmap traced from the DVD logo — drawXbm renders it directly.
 // Bounce area: 72 px wide × 38 px tall on the 128×64 OLED.
@@ -4360,61 +4372,71 @@ void ssDrawMario() {
 }
 
 // ── Preset 2 — Matrix Rain ────────────────────────────────────────────────────
-// 21 falling columns; each column has a "head" pixel block that advances at a
-// random speed and leaves a tapering pixel trail behind it. Columns restart
-// above the screen at random offsets so they never all sync up.
+// 21 falling columns of actual rendered characters, mimicking the half-width
+// katakana glyphs used in the film's title sequence.
+// ArialMT_Plain_10 = ~6 px wide × 8 px tall → 21 cols × 8 rows fills 128×64.
+// Head glyph re-randomises every frame (bright flicker).
+// Trail cells mutate one random glyph per frame (the subtle swap from the film).
+// Tail fading is faked by skipping alternate rows deeper in the trail.
+
+static const uint8_t MX_CHARSET_LEN = sizeof(MX_CHARSET) - 1;
+
+static char mxRandChar() {
+  return MX_CHARSET[random(MX_CHARSET_LEN)];
+}
+
 void ssInitMatrix() {
   for (int c = 0; c < MX_COLS; c++) {
-    mxHead[c]  = -(int16_t)random(10, 90);   // stagger above screen
-    mxSpeed[c] =  1 + (uint8_t)random(0, 4);
-    mxLen[c]   = 12 + (uint8_t)random(0, 24);
+    mxHead[c]  = -(int16_t)random(10, 90);
+    mxSpeed[c] =  1 + (uint8_t)random(0, 3);
+    mxLen[c]   =  4 + (uint8_t)random(0, 5);
+    for (int r = 0; r < MX_ROWS; r++) mxChar[c][r] = mxRandChar();
   }
   mxInited = true;
 }
 
 void ssDrawMatrix() {
   if (!mxInited) ssInitMatrix();
-  if (millis() - ssaverFrameMs < 55) return;   // ~18 fps
+  if (millis() - ssaverFrameMs < 80) return;  // ~12 fps — readable character pace
   ssaverFrameMs = millis();
 
   display.clear();
+  display.setFont(ArialMT_Plain_10);
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
 
   for (int c = 0; c < MX_COLS; c++) {
-    int xBase = c * MX_COL_PX;
-    int head  = (int)mxHead[c];
+    int headPx  = (int)mxHead[c];
+    int headRow = headPx / 8;
+
+    // Mutate one random trail cell each frame
+    mxChar[c][(int16_t)(random(MX_ROWS))] = mxRandChar();
+
+    // Re-randomise head glyph every frame for bright flicker
+    mxChar[c][(headRow + MX_ROWS) % MX_ROWS] = mxRandChar();
 
     for (int t = 0; t < (int)mxLen[c]; t++) {
-      int py = head - t;
-      if (py < 0 || py >= 64) continue;
+      int row = headRow - t;
+      if (row < 0 || row >= MX_ROWS) continue;
 
-      if (t == 0) {
-        // Leading head: 4px wide 2-row bright block
-        for (int dx = 0; dx < 4; dx++) {
-          display.setPixel(xBase + dx, py);
-          if (py > 0) display.setPixel(xBase + dx, py - 1);
-        }
-      } else if (t < 5) {
-        // Near-head trail: 3px wide
-        for (int dx = 0; dx < 3; dx++) display.setPixel(xBase + dx, py);
-      } else if (t < 12) {
-        // Mid trail: 2px wide, skip alternate rows for "character" texture
-        if (t % 2 == 0) for (int dx = 0; dx < 2; dx++) display.setPixel(xBase + dx, py);
-      } else {
-        // Tail: single scatter pixel
-        if ((py + c) % 3 == 0) display.setPixel(xBase, py);
-      }
+      // Skip alternate rows deep in tail → faked dimming
+      if (t >= 3 && (t % 2 != 0)) continue;
+      if (t >= (int)mxLen[c] - 1 && (row + c) % 2 != 0) continue;
+
+      char buf[2] = { mxChar[c][row % MX_ROWS], '\0' };
+      display.drawString(c * MX_COL_PX, row * 8, buf);
     }
 
     mxHead[c] += mxSpeed[c];
-    // Reset when entire trail has cleared the bottom
-    if (mxHead[c] - (int)mxLen[c] > 64) {
-      mxHead[c]  = -(int16_t)random(5, 70);
-      mxSpeed[c] =  1 + (uint8_t)random(0, 4);
-      mxLen[c]   = 12 + (uint8_t)random(0, 24);
+
+    if ((mxHead[c] / 8) - (int)mxLen[c] >= MX_ROWS) {
+      mxHead[c]  = -(int16_t)(random(5, 64));
+      mxSpeed[c] =  1 + (uint8_t)random(0, 3);
+      mxLen[c]   =  4 + (uint8_t)random(0, 5);
+      for (int r = 0; r < MX_ROWS; r++) mxChar[c][r] = mxRandChar();
     }
   }
+
   display.display();
-  
 }
 // ── Preset 3 — DVD Logo Bounce ────────────────────────────────────────────────
 // Faithful recreation of the classic 2000s DVD player idle screensaver.
