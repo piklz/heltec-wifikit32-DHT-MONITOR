@@ -1,8 +1,8 @@
 {
-  "version": "5.31",
+  "version": "5.32",
   "build_date": "2026-05-31",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.31/heltec_wifkit32v2_v531_2DC685EA_firmware.ino.bin",
   "size": 1400.0,
   "crc32": "2DC685EA",
-  "changelog": "v5.31 trend indicators added,prev:ota upload hardened,screensaver preset added (dvd)  "
+  "changelog": "v5.32 added crc32  xtrs to ota page "
 }
