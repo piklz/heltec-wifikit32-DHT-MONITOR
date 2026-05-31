@@ -7,7 +7,7 @@
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
 [![Power](https://img.shields.io/badge/Power-Ultra%20Low%20Efficiency-red.svg)]()
 
-# Heltec WiFi Kit 32 V2 — Temperature & Humidity MQTT Monitor
+# Heltec WiFi Kit 32 V2 — Temperature & Humidity + Battery MQTT Monitor
 
 A production-grade IoT firmware for the Heltec WiFi Kit 32 V2 (ESP32).  
 Reads temperature and humidity from a DHT22, publishes over MQTT, and exposes a full web dashboard — all self-contained on the device.
