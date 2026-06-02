@@ -13,6 +13,7 @@ A production-grade IoT firmware for the Heltec WiFi Kit 32 V2 (ESP32).
 Reads temperature and humidity from a DHT22, publishes over MQTT, and exposes a full web dashboard — all self-contained on the device.
 
 <img width="320" height="166" alt="20260531_193225   w (Phone)" src="https://github.com/user-attachments/assets/490fc011-630f-4827-b02a-3f2033a771ec" />
+<img width="200" height="166" alt="61WbISgpAeL _AC_SX679_" src="https://github.com/user-attachments/assets/143f00e8-3563-4b12-8b9c-85e698ee4aa7" />
 
 # 🛰️ heltec-wifi-kit32 (v2)
 ---
