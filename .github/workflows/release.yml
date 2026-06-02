@@ -5,24 +5,32 @@ on:
     paths:
       - 'firmware/manifest.json' # Triggers automatically on any code push/edit
 
-  # This adds the dropdown selection menu on the GitHub web UI
+  # Adds the dropdown selection menu and text inputs on the GitHub web UI
   workflow_dispatch:
     inputs:
       target_preset:
         description: 'Select Build Preset Target'
         required: true
         default: 'GitHub-Cloud'
-        type: environment # Tells GitHub to use your Environments as the dropdown options
+        type: environment # Links dropdown choices to GitHub Environments
+      manual_version:
+        description: 'New Version (leave blank to use existing manifest version)'
+        required: false
+        type: string
+      manual_changelog:
+        description: 'Release Notes / Changelog (leave blank to keep existing)'
+        required: false
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   build-sync-release:
-    # Links the run to your selected environment preset (defaults to Cloud if you just push code)
+    # Links the run to your selected environment preset (defaults to Cloud if pushed)
     environment: ${{ github.event.inputs.target_preset || 'GitHub-Cloud' }}
     
-    # Inline logic: If the preset is Local-Pi5, route to your self-hosted Pi. Otherwise, use the Cloud.
+    # Route to local Pi 5 if chosen, otherwise use GitHub Cloud runners
     runs-on: ${{ (github.event.inputs.target_preset == 'Local-Pi5') && 'self-hosted' || 'ubuntu-latest' }}
 
     steps:
@@ -47,7 +55,6 @@ jobs:
         run: |
           mkdir -p $HOME/Arduino/libraries
 
-          
           if [ -d "$HOME/Arduino/libraries/WiFiManager" ]; then
             echo "WiFiManager already exists. Updating via git pull..."
             cd $HOME/Arduino/libraries/WiFiManager && git pull
@@ -55,8 +62,6 @@ jobs:
             echo "Cloning WiFiManager fresh..."
             git clone https://github.com/tzapu/WiFiManager.git $HOME/Arduino/libraries/WiFiManager
           fi
-          
-          
           
           arduino-cli lib install "Heltec ESP32 Dev-Boards"
           arduino-cli lib install "PubSubClient"
@@ -70,8 +75,7 @@ jobs:
         run: |
           SKETCH_DIR=$(dirname $(find . -name "*.ino" | head -n 1))
           
-          # Target the true Heltec board, but inject custom partition overrides 
-          # to bypass the restrictive core menu validation.
+          # Target Heltec board with partition overrides to bypass core validation
           arduino-cli compile \
             --fqbn esp32:esp32:heltec_wifi_kit_32 \
             --build-property "build.partitions=partitions" \
@@ -82,12 +86,19 @@ jobs:
         id: process_artifacts
         env:
           GITHUB_REPO: ${{ github.repository }}
+          MANUAL_VERSION: ${{ github.event.inputs.manual_version }}
+          MANUAL_CHANGELOG: ${{ github.event.inputs.manual_changelog }}
         run: |
           MANIFEST_PATH="firmware/manifest.json"
           
-          # 1. Parse target version from your initial manifest modification
-          VERSION=$(python3 -c "import json; print(json.load(open('$MANIFEST_PATH'))['version'])")
-          echo "Processing Firmware Version: $VERSION"
+          # 1. Parse target version (Use manual text input if provided, otherwise fallback to manifest)
+          if [ -n "$MANUAL_VERSION" ]; then
+            VERSION="$MANUAL_VERSION"
+            echo "Using manually inputted version: $VERSION"
+          else
+            VERSION=$(python3 -c "import json; print(json.load(open('$MANIFEST_PATH'))['version'])")
+            echo "Using existing manifest version: $VERSION"
+          fi
           
           # 2. Grab the actual binary output and calculate its true CRC32 checksum
           TARGET_BIN=$(ls ./build/*.bin | grep -v "bootloader" | grep -v "partitions" | head -n 1)
@@ -104,11 +115,12 @@ jobs:
           NEW_NAME="heltec_wifkit32v2_v${VERSION//./}_${CRC32}_firmware.ino.bin"
           mv "$TARGET_BIN" "./build/$NEW_NAME"
           
-          # 4. Use Python to inject metrics safely into manifest.json by passing variables from the environment context
+          # 4. Export context parameters to the local environment context for Python injection
           export D_VERSION="$VERSION"
           export D_NAME="$NEW_NAME"
           export D_SIZE="$SIZE_KB"
           export D_CRC32="$CRC32"
+          export D_CHANGELOG="$MANUAL_CHANGELOG"
           
           python3 -c "
           import json
@@ -118,11 +130,16 @@ jobs:
           with open('$MANIFEST_PATH', 'r') as f:
               data = json.load(f)
           
-          # Injecting/updating the production parameters safely from the environment map
+          # Safely inject/update parameters
+          data['version'] = os.environ['D_VERSION']
           data['build_date'] = datetime.now(timezone.utc).strftime('%Y-%m-%d')
           data['binary'] = f'https://github.com/' + os.environ['GITHUB_REPO'] + f'/releases/download/v' + os.environ['D_VERSION'] + '/' + os.environ['D_NAME']
           data['size'] = float(os.environ['D_SIZE'])
           data['crc32'] = os.environ['D_CRC32']
+          
+          # Update the changelog block if text was inputted manually
+          if os.environ.get('D_CHANGELOG'):
+              data['changelog'] = os.environ['D_CHANGELOG']
           
           with open('$MANIFEST_PATH', 'w') as f:
               json.dump(data, f, indent=2)
@@ -138,7 +155,7 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
           git add firmware/manifest.json
-          # Only commit if changes exist to prevent empty run loops
+          # Only commit if changes exist to prevent empty run loops. [skip ci] prevents triggering cloud push builds.
           git diff-index --quiet HEAD || git commit -m "chore: automated manifest update for v${{ steps.process_artifacts.outputs.version }} [skip ci]"
           git push origin main
 
