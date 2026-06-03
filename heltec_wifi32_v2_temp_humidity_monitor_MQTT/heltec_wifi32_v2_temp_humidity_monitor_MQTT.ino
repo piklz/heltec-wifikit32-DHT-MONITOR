@@ -1525,6 +1525,19 @@ void setupWiFiManager(bool forcePortal) {
       configTime(0, 0, "uk.pool.ntp.org", "time.google.com");
       setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1); tzset();
       loadConfig();  // ensure globals populated even if we skipped normal path
+      // Wait up to 2 s for NTP — same budget as the normal DHCP path.
+      struct tm _nti;
+      if (getLocalTime(&_nti, 2000)) {
+        char _tb[6], _db[6];
+        strftime(_tb, sizeof(_tb), "%H:%M", &_nti);
+        strftime(_db, sizeof(_db), "%d/%m", &_nti);
+        currentTimeStr = String(_tb);
+        currentDateStr = String(_db);
+        ntpSynced = true;
+        Serial.println("[NTP] Synced (fast path): " + currentDateStr + " " + currentTimeStr);
+      } else {
+        Serial.println(F("[NTP] Sync failed on fast path — will retry on read"));
+      }
       return;        // ← skip full WiFiManager block
     }
     // Static connect failed — clear cached IP and fall through to normal DHCP
@@ -1935,11 +1948,20 @@ void readSensor() {
 
   //     Dblclick manual trigger also updates web ui last read stat  
   // === UPDATE DASHBOARD LAST READ TIME ===
+  // If NTP didn't sync at boot (common on fast static-IP wakes), try once more
+  // now that we've been up a few seconds and the DNS resolver has had time.
+  if (!ntpSynced) {
+    struct tm _ntr;
+    if (getLocalTime(&_ntr, 1500)) {
+      ntpSynced = true;
+      Serial.println(F("[NTP] Synced on read retry"));
+    }
+  }
   if (ntpSynced) {
       time_t now = time(nullptr);
       struct tm* t = localtime(&now);
       char dateBuf[6], timeBuf[6];
-      strftime(dateBuf, sizeof(dateBuf), "%m/%d", t);
+      strftime(dateBuf, sizeof(dateBuf), "%d/%m", t);
       strftime(timeBuf, sizeof(timeBuf), "%H:%M", t);
       currentDateStr = dateBuf;
       currentTimeStr = timeBuf;
