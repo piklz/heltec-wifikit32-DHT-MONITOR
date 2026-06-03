@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.33
+ * Version:       5.34
  * Last Updated:  2026-06-03
  * License:       MIT
  *
@@ -31,24 +31,30 @@
  *  • Deep sleep support for low-power operation
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.34 — 2026-06-03
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX CRITICAL: detectDoubleReset() now skipped on timer wakes. Previously
+ *         every timer wake wrote the DRD flag; the next wake read it and opened
+ *         the config portal, causing the LED to stick on and WiFi to stop.
+ *  - FIX: clearDoubleReset() added to fast static-IP return path so the DRD
+ *         flag is always cleared after a successful connection.
+ *  - FIX: NTP sync wait (2s) added to fast static-IP path — previously
+ *         configTime() was called but the function returned before
+ *         getLocalTime() had a chance to complete, leaving ntpSynced=false
+ *         and TIME/LAST READ showing --/-- --:--.
+ *  - FIX: NTP retry added in readSensor() for cases where boot-time sync
+ *         failed — ensures manual double-click reads always show a timestamp.
+ *  - FIX: Date format in readSensor() corrected from US %m/%d to UK %d/%m.
+ *  - FIX: Web page load no longer unconditionally resets the 10-min sleep
+ *         window. Timer wakes keep their short window; only button wakes or
+ *         already-extended windows get refreshed to 10 min.
+ *  - OPT: Timer wake awake window reduced from 45s to 8s. Publish+flush
+ *         completes in ~2-3s; 8s gives headroom without wasting battery.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.33 — 2026-06-03
  * ─────────────────────────────────────────────────────────────────────────────
- *  - NEW: Static IP caching — after first DHCP, IP/GW/subnet/DNS stored in
- *         RTC memory. Stealth timer wakes bypass WiFiManager DHCP and call
- *         WiFi.config() directly, cutting WiFi connect from ~3s to ~400ms.
- *         Falls back to full DHCP automatically if static connect fails.
- *  - NEW: Stealth wake flush window shortened to STEALTH_FLUSH_MS (1500ms)
- *         instead of 5000ms, reducing total stealth wake time to ~3-4s.
- *  - NEW: Unified web UI countdown timer (webUiExpiresAt). All 10-min window
- *         sources now share one variable. Button press, any web page load, or
- *         settings save resets the timer.
- *  - NEW: OLED system-info frame shows web UI countdown as mm:ss when under
- *         2 min remaining, and minutes otherwise. Gives user clear visibility
- *         of how long the web UI window lasts before device may sleep.
- *  - NEW: Web UI header shows live countdown via JS polling /api/status JSON
- *         (webui_secs_left field). Turns amber under 2 min, red under 30s.
- *  - FIX: ssResetBall / ssResetMario forward declarations added to fix
- *         'not declared in this scope' lambda compile errors.
+ *  - NEW: Static IP caching — after first DHCP, IP/GW/subnet/DNS 
  *
  *
  */
@@ -100,7 +106,7 @@
 //   USB detection: ADC only ever sees VBAT. Charging raises it above ~4.05V.
 //   USB-only / no battery = ADC floats; caught by variance check (isBatFloating).
 // ─────────────────────────────────────────────────────────────────────────────
-#define FW_VERSION            "5.33"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.34"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1525,7 +1531,9 @@ void setupWiFiManager(bool forcePortal) {
       configTime(0, 0, "uk.pool.ntp.org", "time.google.com");
       setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1); tzset();
       loadConfig();  // ensure globals populated even if we skipped normal path
-      // Wait up to 2 s for NTP — same budget as the normal DHCP path.
+      // Clear DRD flag — fast path skips the normal clearDoubleReset() call
+      clearDoubleReset();
+      // Wait up to 2s for NTP — same budget as normal DHCP path
       struct tm _nti;
       if (getLocalTime(&_nti, 2000)) {
         char _tb[6], _db[6];
@@ -1536,7 +1544,7 @@ void setupWiFiManager(bool forcePortal) {
         ntpSynced = true;
         Serial.println("[NTP] Synced (fast path): " + currentDateStr + " " + currentTimeStr);
       } else {
-        Serial.println(F("[NTP] Sync failed on fast path — will retry on read"));
+        Serial.println(F("[NTP] Sync pending — will retry on read"));
       }
       return;        // ← skip full WiFiManager block
     }
@@ -1948,8 +1956,9 @@ void readSensor() {
 
   //     Dblclick manual trigger also updates web ui last read stat  
   // === UPDATE DASHBOARD LAST READ TIME ===
-  // If NTP didn't sync at boot (common on fast static-IP wakes), try once more
-  // now that we've been up a few seconds and the DNS resolver has had time.
+  // If NTP didn't sync at boot (common on fast static-IP wakes where NTP
+  // resolves after setup() returns), retry once now — we've been up a few
+  // seconds and DNS has had time to respond.
   if (!ntpSynced) {
     struct tm _ntr;
     if (getLocalTime(&_ntr, 1500)) {
@@ -1961,7 +1970,7 @@ void readSensor() {
       time_t now = time(nullptr);
       struct tm* t = localtime(&now);
       char dateBuf[6], timeBuf[6];
-      strftime(dateBuf, sizeof(dateBuf), "%d/%m", t);
+      strftime(dateBuf, sizeof(dateBuf), "%d/%m", t);   // UK format dd/mm
       strftime(timeBuf, sizeof(timeBuf), "%H:%M", t);
       currentDateStr = dateBuf;
       currentTimeStr = timeBuf;
@@ -2759,7 +2768,12 @@ void ssResetMario();
 void setupOTA() {
   // ── Dashboard ──────────────────────────────────────────────────────────────
   server.on("/", HTTP_GET, []() {
-    disableDeepSleepUntil = millis() + 10UL*60UL*1000UL;
+    // Only extend the sleep window to 10 min if this was a button wake
+    // (window already > 5 min). Timer wakes keep their short window so
+    // the browser syncs down from /api/status rather than overriding it.
+    if (webUiExpiresAt > millis() + 5UL * 60UL * 1000UL) {
+      webUiExpiresAt = millis() + 10UL * 60UL * 1000UL;  // refresh button-wake window
+    }
     String h = pageHead(device_name);
 
     // System
@@ -4242,7 +4256,11 @@ void setup() {
  
 
   // ── Double reset check — BEFORE WiFiManager ────────────────────────────────
-  bool forcePortal = detectDoubleReset();
+  // SKIP on timer wakes: deep sleep resets the ESP32 on every wake, so DRD
+  // would fire on every second timer wake and force the config portal open.
+  // Only meaningful on power-on or button wakes where a human double-reset
+  // is actually possible.
+  bool forcePortal = (!wokeByTimer) && detectDoubleReset();
 
   // ── WiFiManager (blocks here until connected or portal times out) ──────────
   // WDT is NOT started yet — portal can legitimately take 3 minutes.
@@ -4437,8 +4455,9 @@ void setup() {
     disableDeepSleepUntil = millis() + 10UL * 60UL * 1000UL;
     Serial.println(F("[BOOT] Button wake -- awake 10 min"));
   } else {
-    disableDeepSleepUntil = millis() + 45000UL;
-    Serial.println(F("[BOOT] Timer/power wake -- awake 45 s then sleep"));
+    // Timer wake: publish+flush takes ~2-3s; 8s gives comfortable headroom.
+    disableDeepSleepUntil = millis() + 8000UL;
+    Serial.println(F("[BOOT] Timer/power wake -- awake 8s then sleep"));
   }
 
   // ── LED: slow breathing = running normally (suppressed in Stealth timer wakes) ──
