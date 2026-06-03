@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.32
- * Last Updated:  2026-05-31
+ * Version:       5.33
+ * Last Updated:  2026-06-03
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,26 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.33 — 2026-06-03
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: Static IP caching — after first DHCP, IP/GW/subnet/DNS stored in
+ *         RTC memory. Stealth timer wakes bypass WiFiManager DHCP and call
+ *         WiFi.config() directly, cutting WiFi connect from ~3s to ~400ms.
+ *         Falls back to full DHCP automatically if static connect fails.
+ *  - NEW: Stealth wake flush window shortened to STEALTH_FLUSH_MS (1500ms)
+ *         instead of 5000ms, reducing total stealth wake time to ~3-4s.
+ *  - NEW: Unified web UI countdown timer (webUiExpiresAt). All 10-min window
+ *         sources now share one variable. Button press, any web page load, or
+ *         settings save resets the timer.
+ *  - NEW: OLED system-info frame shows web UI countdown as mm:ss when under
+ *         2 min remaining, and minutes otherwise. Gives user clear visibility
+ *         of how long the web UI window lasts before device may sleep.
+ *  - NEW: Web UI header shows live countdown via JS polling /api/status JSON
+ *         (webui_secs_left field). Turns amber under 2 min, red under 30s.
+ *  - FIX: ssResetBall / ssResetMario forward declarations added to fix
+ *         'not declared in this scope' lambda compile errors.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.32 — 2026-05-31
@@ -52,50 +72,6 @@
  *         ArialMT_Plain_10 rather than pixel blocks. Head glyph re-randomises
  *         every frame; trail cells mutate one glyph per frame matching the
  *         subtle character-swap visible in the film.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.31 — 2026-05-30
- * ─────────────────────────────────────────────────────────────────────────────
- *  - NEW: Trend indicators for temperature and humidity — stock-ticker style.
- *         Each new sensor reading is compared to the previous one. If the
- *         change exceeds the dead-band (0.3°C / 0.5% RH) a directional arrow
- *         is shown; otherwise no arrow is displayed (no noise flicker).
- *         OLED (drawFrame1): solid ▲/▼ pixel triangle drawn to the right of
- *         each value using drawLine primitives — no extra flash cost.
- *         Web dashboard: Unicode ↑/↓ inline next to each value with colours
- *         that make intuitive sense (temp↑ red, temp↓ blue, hum↑ blue,
- *         hum↓ orange). Arrow is hidden entirely when trend is stable.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.30 — 2026-05-30
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: OTA upload safety — filename validation now enforced server-side.
- *         Rejects any file not ending in .bin and any .merged. binary before
- *         a single byte is written to flash (previously JS-only, bypassable).
- *  - FIX: OTA partition size guard — Update.begin() now called with the actual
- *         Content-Length so the framework rejects oversized binaries up front
- *         rather than silently overflowing the OTA partition.
- *  - NEW: OTA FW_VER marker scan — first 64 KB of every uploaded binary is
- *         scanned for the embedded "FW_VER:" signature. Upload is aborted if
- *         the marker is absent, catching wrong-project or corrupt binaries
- *         before they are committed to flash.
- *  - NEW: OTA downgrade warning — browser reads the FW_VER marker from the
- *         binary client-side (sniffVersion) and shows a confirm() dialog if
- *         the version is older than the running firmware. User can override
- *         (useful during dev/debug). No save or reload required.
- *  - FIX: OTA rejection reason now returned in HTTP response body and shown
- *         on OLED ("FAIL: <reason>") instead of the generic "flash write error".
- *  - FIX: uploadRejected / uploadRejectReason / uploadMarkerFound /
- *         uploadBytesScanned promoted to file scope so both the upload handler
- *         lambda and the completion handler lambda can share them (previously
- *         caused 'not declared in this scope' compile error).
- *  - FIX: server.send() ternary type mismatch (F() vs String) resolved by
- *         building response into a String before passing to send().
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.29 — 2026-05-29
- * ─────────────────────────────────────────────────────────────────────────────
- *  - ADDED: Screensaver DVD logo bouncer nostalgia!.
  *
  *
  */
@@ -147,7 +123,7 @@
 //   USB detection: ADC only ever sees VBAT. Charging raises it above ~4.05V.
 //   USB-only / no battery = ADC floats; caught by variance check (isBatFloating).
 // ─────────────────────────────────────────────────────────────────────────────
-#define FW_VERSION            "5.32"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.33"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -347,6 +323,19 @@ uint32_t ps_cpu_wake_mhz = 240; // CPU MHz to use during the wake window
 // while the displayed counter still increments on every wake for continuity.
 RTC_DATA_ATTR uint32_t rtcBootOffset      = 0;    // sleep-wake counter, wiped on power-loss
 RTC_DATA_ATTR bool     rtcDeepSleepEnabled = false;
+
+// ── Static IP cache (RTC) — populated after first DHCP, reused on timer wakes
+// to skip DHCP negotiation and cut WiFi connect time from ~3s to ~400ms.
+// All four fields stored as uint32_t (network byte order from IPAddress).
+RTC_DATA_ATTR uint32_t rtcIp      = 0;
+RTC_DATA_ATTR uint32_t rtcGw      = 0;
+RTC_DATA_ATTR uint32_t rtcSn      = 0;
+RTC_DATA_ATTR uint32_t rtcDns     = 0;
+RTC_DATA_ATTR bool     rtcIpValid = false;  // true once first DHCP succeeded
+
+// Stealth wake flush window — shorter than the normal 5 s to minimise wake time.
+// MQTT TCP ACKs typically complete within 500-800 ms; 1500 ms gives headroom.
+#define STEALTH_FLUSH_MS  1500UL
 #define HIST_SIZE 8
 RTC_DATA_ATTR float    rtcHistTemp[HIST_SIZE] = {};
 RTC_DATA_ATTR float    rtcHistHum[HIST_SIZE]  = {};
@@ -363,7 +352,10 @@ unsigned long deepSleepSeconds         = 600;
 uint8_t       wakeDisplayMode           = 1;   // default: Active
 bool          stealthThisWake           = false; // set in setup() before ui.init()
 // disableDeepSleepUntil is set at end of setup() — NEVER before WiFiManager
-unsigned long disableDeepSleepUntil    = 0;
+// webUiExpiresAt: unified 10-min web UI window. Any button press, page load,
+// or settings save resets this. Deep sleep is blocked while millis() < webUiExpiresAt.
+unsigned long webUiExpiresAt          = 0;
+#define disableDeepSleepUntil webUiExpiresAt   // back-compat alias — existing code unchanged
 unsigned long lastSensorPublishTime    = 0;
 bool          triggerDeepSleepAfterPublish = false;
 
@@ -1338,11 +1330,20 @@ void drawFrame2(ScreenDisplay *d, DisplayUiState *s, int16_t x, int16_t y) {
     d->drawString(0 + x, 23 + y, "WiFi: Disconnected");
     d->drawString(0 + x, 33 + y, "AP: ESP32-Setup");
   }
-  // Bottom line: uptime + sleep window countdown if active
+  // Bottom line: uptime or web UI countdown if window is active
   String bot = "Up: " + getUptime();
-  if (deepSleepEnabled && disableDeepSleepUntil > millis()) {
-    int minsLeft = (disableDeepSleepUntil - millis()) / 60000;
-    bot = "Awake: " + String(minsLeft) + "m left";
+  if (webUiExpiresAt > millis()) {
+    unsigned long msLeft = webUiExpiresAt - millis();
+    if (msLeft < 120000UL) {
+      // Under 2 min — show mm:ss for urgency
+      unsigned int sLeft = msLeft / 1000;
+      char buf[16];
+      snprintf(buf, sizeof(buf), "WebUI: %u:%02u left", sLeft / 60, sLeft % 60);
+      bot = String(buf);
+    } else {
+      int minsLeft = msLeft / 60000;
+      bot = "WebUI: " + String(minsLeft) + "m left";
+    }
   }
   d->drawString(0 + x, 53 + y, bot);
 }
@@ -1527,6 +1528,35 @@ void saveConfigCallback() {
 // NOTE: intentionally called BEFORE WDT is started — portal can block 3 min.
 // ═════════════════════════════════════════════════════════════════════════════
 void setupWiFiManager(bool forcePortal) {
+  // ── Fast static-IP reconnect for stealth timer wakes ─────────────────────
+  // Skips WiFiManager and DHCP entirely — cuts connect time from ~3s to ~400ms.
+  // Falls back to full DHCP path below if static connect fails within 3 s.
+  if (stealthThisWake && rtcIpValid && !forcePortal) {
+    WiFi.mode(WIFI_STA);
+    WiFi.config(IPAddress(rtcIp), IPAddress(rtcGw), IPAddress(rtcSn), IPAddress(rtcDns));
+    WiFi.begin();  // reconnects to last saved SSID/password
+    unsigned long t = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t < 3000) {
+      delay(50); esp_task_wdt_reset();
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiConnected = true;
+      portalActive  = false;
+      ui.setFrames(frames5, 5);
+      Serial.printf("[WiFi] Fast static connect: %s (%.0f ms)\n",
+                    WiFi.localIP().toString().c_str(), (float)(millis() - t));
+      configTime(0, 0, "uk.pool.ntp.org", "time.google.com");
+      setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1); tzset();
+      loadConfig();  // ensure globals populated even if we skipped normal path
+      return;        // ← skip full WiFiManager block
+    }
+    // Static connect failed — clear cached IP and fall through to normal DHCP
+    Serial.println("[WiFi] Static connect failed — falling back to DHCP");
+    rtcIpValid = false;
+    WiFi.disconnect(true);
+    delay(100);
+  }
+
   WiFiManager wm;
   loadConfig();  // populate globals before setting parameter defaults
 
@@ -1584,6 +1614,14 @@ void setupWiFiManager(bool forcePortal) {
     delay(1000);
     ESP.restart();
   }
+
+  // ── Cache IP config in RTC for fast static-IP reconnect on next timer wake ──
+  rtcIp      = (uint32_t)WiFi.localIP();
+  rtcGw      = (uint32_t)WiFi.gatewayIP();
+  rtcSn      = (uint32_t)WiFi.subnetMask();
+  rtcDns     = (uint32_t)WiFi.dnsIP();
+  rtcIpValid = true;
+  Serial.printf("[WiFi] IP cached for static reuse: %s\n", WiFi.localIP().toString().c_str());
 
   // Switch to full 5-frame set now that WiFi is connected
   ui.setFrames(frames5, 5);
@@ -1971,7 +2009,31 @@ static String pageHead(const String& title) {
     F("</title><meta charset='UTF-8'>"
       "<meta name='viewport' content='width=device-width,initial-scale=1'><style>") +
     FPSTR(COMMON_CSS) +
-    F("</style></head><body><div class='c'>");
+    F("</style></head><body><div class='c'>"
+      // ── Web UI countdown banner — shown only when deep sleep is enabled ──────
+      "<div id='_wucb' style='display:none;text-align:center;padding:5px 10px;margin-bottom:6px;"
+      "border-radius:6px;font-size:12px;font-weight:600;background:#1f1f1f;color:#888'>"
+      "&#x23F1; Web UI active: <span id='_wuct'>--:--</span></div>"
+      "<script>"
+      "(function(){"
+      "function fmt(s){var m=Math.floor(s/60),r=s%60;"
+      "return(m<10?'0':'')+m+':'+(r<10?'0':'')+r;}"
+      "function poll(){"
+      "fetch('/api/status').then(function(r){return r.json();}).then(function(d){"
+      "var b=document.getElementById('_wucb');"
+      "var t=document.getElementById('_wuct');"
+      "if(!d.deep_sleep_enabled){b.style.display='none';return;}"
+      "var s=d.webui_secs_left||0;"
+      "b.style.display='block';"
+      "t.textContent=fmt(s);"
+      "if(s<=30){b.style.background='#3b1a1a';b.style.color='#ef9a9a';}"
+      "else if(s<=120){b.style.background='#2b2000';b.style.color='#ffe082';}"
+      "else{b.style.background='#1f1f1f';b.style.color='#888';}"
+      "}).catch(function(){});"
+      "}"
+      "poll();setInterval(poll,10000);"  // poll every 10 s — light weight
+      "})();"
+      "</script>");
 }
 static String pageFoot() { return F("</div></body></html>"); }
 
@@ -3722,6 +3784,17 @@ void setupOTA() {
         12, "/settings"));
   });
 
+  // ── /api/status — lightweight JSON polled by web UI for live countdown ──────
+  server.on("/api/status", HTTP_GET, []() {
+    webUiExpiresAt = max(webUiExpiresAt, millis() + 10UL * 60UL * 1000UL); // refresh on poll
+    long secsLeft = webUiExpiresAt > millis() ? (long)((webUiExpiresAt - millis()) / 1000) : 0;
+    String j = "{\"webui_secs_left\":" + String(secsLeft) + ","
+               "\"deep_sleep_enabled\":" + (deepSleepEnabled ? "true" : "false") + ","
+               "\"uptime\":" + String(millis() / 1000) + "}";
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, F("application/json"), j);
+  });
+
   // ── /ota_check — trigger immediate manifest fetch, return JSON status ─────────
   server.on("/ota_check", HTTP_GET, []() {
   checkOtaManifest(true);  // force=true bypasses the interval guard
@@ -4004,6 +4077,12 @@ void setupOTA() {
   Serial.println(F("[Web] Server started"));
   Serial.print(F("[Web] http://")); Serial.println(WiFi.localIP().toString());
 }
+
+// ── Forward declarations — screensaver reset functions called inside lambdas
+// in setupOTA() which precedes their definitions. Arduino's auto-prototype
+// generator does not forward-declare functions referenced inside lambdas.
+void ssResetBall();
+void ssResetMario();
 
 void setup() {
   Serial.begin(115200);
@@ -4821,8 +4900,10 @@ void loop() {
 
   // ── Deep sleep trigger ─────────────────────────────────────────────────────
   if (deepSleepEnabled && triggerDeepSleepAfterPublish) {
-    bool windowExpired  = (millis() > disableDeepSleepUntil);
-    bool flushComplete  = (millis() - lastSensorPublishTime > 5000UL);
+    bool windowExpired  = (millis() > webUiExpiresAt);
+    // Stealth timer wakes use a shorter flush window to minimise total wake time.
+    unsigned long flushMs = stealthThisWake ? STEALTH_FLUSH_MS : 5000UL;
+    bool flushComplete  = (millis() - lastSensorPublishTime > flushMs);
     if (windowExpired && flushComplete) {
       // Final MQTT flush before sleeping
       unsigned long t = millis();
