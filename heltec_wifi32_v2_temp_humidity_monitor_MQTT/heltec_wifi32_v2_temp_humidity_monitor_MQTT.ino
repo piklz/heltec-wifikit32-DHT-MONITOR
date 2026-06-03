@@ -50,29 +50,6 @@
  *  - FIX: ssResetBall / ssResetMario forward declarations added to fix
  *         'not declared in this scope' lambda compile errors.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.32 — 2026-05-31
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: Forward declarations added for ssResetBall() and ssResetMario() to
- *         resolve 'not declared in this scope' compile errors caused by their
- *         use inside lambdas in setupOTA() which precedes their definitions.
- *  - NEW: Running firmware CRC32 computed at boot from flash partition and
- *         displayed in brackets next to current version on the OTA page.
- *         Uses the same ISO-HDLC CRC32 polynomial as the manifest + upload
- *         checker so values are directly comparable.
- *  - NEW: /ota_check JSON now includes "running_crc32" so the browser can
- *         compare running vs GitHub binary without a page reload.
- *  - NEW: CRC mismatch detection on Check Updates — if version matches but
- *         CRC32 differs (silent rebuild without version bump), an amber warning
- *         box appears showing both CRC values plus the manifest changelog as a
- *         hint. A Re-flash from GitHub button hits /ota_reinstall which
- *         re-applies the same version from GitHub, bypassing the version-newer
- *         guard used by the normal update flow.
- *  - NEW: Matrix Rain screensaver now renders actual characters via
- *         ArialMT_Plain_10 rather than pixel blocks. Head glyph re-randomises
- *         every frame; trail cells mutate one glyph per frame matching the
- *         subtle character-swap visible in the film.
- *
  *
  */
 
@@ -2016,22 +1993,28 @@ static String pageHead(const String& title) {
       "&#x23F1; Web UI active: <span id='_wuct'>--:--</span></div>"
       "<script>"
       "(function(){"
-      "function fmt(s){var m=Math.floor(s/60),r=s%60;"
+      "var _s=0,_ds=false;"
+      "function fmt(s){if(s<=0)return'00:00';"
+      "var m=Math.floor(s/60),r=s%60;"
       "return(m<10?'0':'')+m+':'+(r<10?'0':'')+r;}"
-      "function poll(){"
-      "fetch('/api/status').then(function(r){return r.json();}).then(function(d){"
+      "function render(){"
       "var b=document.getElementById('_wucb');"
       "var t=document.getElementById('_wuct');"
-      "if(!d.deep_sleep_enabled){b.style.display='none';return;}"
-      "var s=d.webui_secs_left||0;"
+      "if(!b||!t)return;"
+      "if(!_ds){b.style.display='none';return;}"
       "b.style.display='block';"
-      "t.textContent=fmt(s);"
-      "if(s<=30){b.style.background='#3b1a1a';b.style.color='#ef9a9a';}"
-      "else if(s<=120){b.style.background='#2b2000';b.style.color='#ffe082';}"
-      "else{b.style.background='#1f1f1f';b.style.color='#888';}"
-      "}).catch(function(){});"
-      "}"
-      "poll();setInterval(poll,10000);"  // poll every 10 s — light weight
+      "t.textContent=fmt(_s);"
+      "if(_s<=30){b.style.background='#3b1a1a';b.style.color='#ef9a9a';}"
+      "else if(_s<=120){b.style.background='#2b2000';b.style.color='#ffe082';}"
+      "else{b.style.background='#1f1f1f';b.style.color='#888';}}"
+      "function poll(){"
+      "fetch('/api/status').then(function(r){return r.json();}).then(function(d){"
+      "_ds=!!d.deep_sleep_enabled;"
+      "_s=parseInt(d.webui_secs_left)||0;"
+      "render();"
+      "}).catch(function(){});}"
+      "setInterval(function(){if(_s>0)_s--;render();},1000);"
+      "poll();setInterval(poll,30000);"
       "})();"
       "</script>");
 }
@@ -3785,8 +3768,9 @@ void setupOTA() {
   });
 
   // ── /api/status — lightweight JSON polled by web UI for live countdown ──────
+  // READ-ONLY — does NOT reset webUiExpiresAt. Only button presses and page
+  // loads reset the timer so the countdown is accurate.
   server.on("/api/status", HTTP_GET, []() {
-    webUiExpiresAt = max(webUiExpiresAt, millis() + 10UL * 60UL * 1000UL); // refresh on poll
     long secsLeft = webUiExpiresAt > millis() ? (long)((webUiExpiresAt - millis()) / 1000) : 0;
     String j = "{\"webui_secs_left\":" + String(secsLeft) + ","
                "\"deep_sleep_enabled\":" + (deepSleepEnabled ? "true" : "false") + ","
