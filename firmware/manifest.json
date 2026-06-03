@@ -1,8 +1,8 @@
 {
-  "version": "5.32",
+  "version": "5.33",
   "build_date": "2026-05-31",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.32/heltec_wifkit32v2_v532_5ED2929A_firmware.ino.bin",
   "size": 1404.3,
   "crc32": "5ED2929A",
-  "changelog": "v5.32 added crc32  xtrs to ota page "
+  "changelog": "v5.33 static ip caching  to save  battery quicker up and down sleep timers"
 }
