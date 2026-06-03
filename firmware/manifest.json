@@ -1,8 +1,8 @@
 {
   "version": "5.33",
   "build_date": "2026-06-03",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.33/heltec_wifkit32v2_v533_9597AC40_firmware.ino.bin",
-  "size": 1407.1,
-  "crc32": "9597AC40",
-  "changelog": "static ip caching  to save  battery webui timer tweak"
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.33/heltec_wifkit32v2_v533_895CC3CB_firmware.ino.bin",
+  "size": 1407.5,
+  "crc32": "895CC3CB",
+  "changelog": "webui's timer fixed"
 }
