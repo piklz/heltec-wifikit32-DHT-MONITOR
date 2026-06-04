@@ -1,5 +1,5 @@
 
-## DHT + onboard battery monitor logger 
+
 ### timer based multiple readings (ntfy/mqtt) + web Portal for config
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
