@@ -6,6 +6,7 @@
 [![Platform](https://img.shields.io/badge/Platform-ESP32-blue.svg)]()
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
 [![Power](https://img.shields.io/badge/Power-Ultra%20Low%20Efficiency-red.svg)]()
+[![End-to-End Automated Firmware and Manifest Sync](https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/actions/workflows/release.yml/badge.svg?event=release)](https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/actions/workflows/release.yml)
 
 # Heltec WiFi Kit 32 V2 — Temperature & Humidity + Battery MQTT Monitor
 
