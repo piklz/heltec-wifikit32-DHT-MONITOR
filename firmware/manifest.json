@@ -2,7 +2,7 @@
   "version": "5.35",
   "build_date": "2026-06-03",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.33/heltec_wifkit32v2_v533_895CC3CB_firmware.ino.bin",
-  "size": 1407.5,
+  "size": 1407.0,
   "crc32": "895CC3CB",
   "changelog": "Web UI countdown now synced FROM hardware"
 }

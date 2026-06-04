@@ -157,6 +157,9 @@ jobs:
           git add firmware/manifest.json
           # Only commit if changes exist to prevent empty run loops. [skip ci] prevents triggering cloud push builds.
           git diff-index --quiet HEAD || git commit -m "chore: automated manifest update for v${{ steps.process_artifacts.outputs.version }} [skip ci]"
+          # Pull any changes that happened remotely during the compilation process
+          git pull --rebase origin main
+
           git push origin main
 
       - name: Generate Automated GitHub Release
