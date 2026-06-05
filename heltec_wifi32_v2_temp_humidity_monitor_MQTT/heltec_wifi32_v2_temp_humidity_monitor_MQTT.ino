@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.35
- * Last Updated:  2026-06-04
+ * Version:       5.36
+ * Last Updated:  2026-06-05
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -31,7 +31,20 @@
  *  • Deep sleep support for low-power operation
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.35 — 2026-06-04
+ * CHANGELOG v5.36 — 2026-06-05
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: NTP-anchored forward-bias correction for deep sleep timing.
+ *         v5.35 subtracted wake-active millis from the sleep interval, which
+ *         corrects software overhead but not the ESP32 RTC oscillator error
+ *         (~1-2%). At 120 min sleep this causes ~1-2 min of cycle drift.
+ *         Fix: rtcNextWakeEpoch stores the intended next-wake Unix epoch in
+ *         RTC memory at sleep time. On wake, if NTP syncs, the actual elapsed
+ *         wall-clock time is compared to the target; any overshoot is
+ *         subtracted from the next sleep duration so cycles self-correct and
+ *         land on the exact target interval regardless of RTC crystal error.
+ *         Falls back to millis-only subtraction if NTP is unavailable.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
  * ─────────────────────────────────────────────────────────────────────────────
  *  - FIX: Web UI countdown now synced FROM hardware on every page load.
  *         All page handlers (/, /settings, /ota, etc.) no longer override
@@ -51,6 +64,92 @@
  *  - FIX: Date format in readSensor() corrected from US %m/%d to UK %d/%m.
  *  - OPT: Timer wake awake window reduced from 45s to 8s.
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.33 — 2026-06-03
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: Static IP caching — after first DHCP, IP/GW/subnet/DNS stored in
+ *         RTC memory. Stealth timer wakes bypass WiFiManager DHCP and call
+ *         WiFi.config() directly, cutting WiFi connect from ~3s to ~400ms.
+ *         Falls back to full DHCP automatically if static connect fails.
+ *  - NEW: Stealth wake flush window shortened to STEALTH_FLUSH_MS (1500ms)
+ *         instead of 5000ms, reducing total stealth wake time to ~3-4s.
+ *  - NEW: Unified web UI countdown timer (webUiExpiresAt). All 10-min window
+ *         sources now share one variable. Button press, any web page load, or
+ *         settings save resets the timer.
+ *  - NEW: OLED system-info frame shows web UI countdown as mm:ss when under
+ *         2 min remaining, and minutes otherwise. Gives user clear visibility
+ *         of how long the web UI window lasts before device may sleep.
+ *  - NEW: Web UI header shows live countdown via JS polling /api/status JSON
+ *         (webui_secs_left field). Turns amber under 2 min, red under 30s.
+ *  - FIX: ssResetBall / ssResetMario forward declarations added to fix
+ *         'not declared in this scope' lambda compile errors.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.32 — 2026-05-31
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Forward declarations added for ssResetBall() and ssResetMario() to
+ *         resolve 'not declared in this scope' compile errors caused by their
+ *         use inside lambdas in setupOTA() which precedes their definitions.
+ *  - NEW: Running firmware CRC32 computed at boot from flash partition and
+ *         displayed in brackets next to current version on the OTA page.
+ *         Uses the same ISO-HDLC CRC32 polynomial as the manifest + upload
+ *         checker so values are directly comparable.
+ *  - NEW: /ota_check JSON now includes "running_crc32" so the browser can
+ *         compare running vs GitHub binary without a page reload.
+ *  - NEW: CRC mismatch detection on Check Updates — if version matches but
+ *         CRC32 differs (silent rebuild without version bump), an amber warning
+ *         box appears showing both CRC values plus the manifest changelog as a
+ *         hint. A Re-flash from GitHub button hits /ota_reinstall which
+ *         re-applies the same version from GitHub, bypassing the version-newer
+ *         guard used by the normal update flow.
+ *  - NEW: Matrix Rain screensaver now renders actual characters via
+ *         ArialMT_Plain_10 rather than pixel blocks. Head glyph re-randomises
+ *         every frame; trail cells mutate one glyph per frame matching the
+ *         subtle character-swap visible in the film.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.31 — 2026-05-30
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: Trend indicators for temperature and humidity — stock-ticker style.
+ *         Each new sensor reading is compared to the previous one. If the
+ *         change exceeds the dead-band (0.3°C / 0.5% RH) a directional arrow
+ *         is shown; otherwise no arrow is displayed (no noise flicker).
+ *         OLED (drawFrame1): solid ▲/▼ pixel triangle drawn to the right of
+ *         each value using drawLine primitives — no extra flash cost.
+ *         Web dashboard: Unicode ↑/↓ inline next to each value with colours
+ *         that make intuitive sense (temp↑ red, temp↓ blue, hum↑ blue,
+ *         hum↓ orange). Arrow is hidden entirely when trend is stable.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.30 — 2026-05-30
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: OTA upload safety — filename validation now enforced server-side.
+ *         Rejects any file not ending in .bin and any .merged. binary before
+ *         a single byte is written to flash (previously JS-only, bypassable).
+ *  - FIX: OTA partition size guard — Update.begin() now called with the actual
+ *         Content-Length so the framework rejects oversized binaries up front
+ *         rather than silently overflowing the OTA partition.
+ *  - NEW: OTA FW_VER marker scan — first 64 KB of every uploaded binary is
+ *         scanned for the embedded "FW_VER:" signature. Upload is aborted if
+ *         the marker is absent, catching wrong-project or corrupt binaries
+ *         before they are committed to flash.
+ *  - NEW: OTA downgrade warning — browser reads the FW_VER marker from the
+ *         binary client-side (sniffVersion) and shows a confirm() dialog if
+ *         the version is older than the running firmware. User can override
+ *         (useful during dev/debug). No save or reload required.
+ *  - FIX: OTA rejection reason now returned in HTTP response body and shown
+ *         on OLED ("FAIL: <reason>") instead of the generic "flash write error".
+ *  - FIX: uploadRejected / uploadRejectReason / uploadMarkerFound /
+ *         uploadBytesScanned promoted to file scope so both the upload handler
+ *         lambda and the completion handler lambda can share them (previously
+ *         caused 'not declared in this scope' compile error).
+ *  - FIX: server.send() ternary type mismatch (F() vs String) resolved by
+ *         building response into a String before passing to send().
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.29 — 2026-05-29
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - ADDED: Screensaver DVD logo bouncer nostalgia!.
  *
  *
  */
@@ -102,7 +201,7 @@
 //   USB detection: ADC only ever sees VBAT. Charging raises it above ~4.05V.
 //   USB-only / no battery = ADC floats; caught by variance check (isBatFloating).
 // ─────────────────────────────────────────────────────────────────────────────
-#define FW_VERSION            "5.35"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.36"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -300,8 +399,13 @@ uint32_t ps_cpu_wake_mhz = 240; // CPU MHz to use during the wake window
 //
 // Flash writes drop from every boot to only on genuine power-on/crash,
 // while the displayed counter still increments on every wake for continuity.
-RTC_DATA_ATTR uint32_t rtcBootOffset      = 0;    // sleep-wake counter, wiped on power-loss
+RTC_DATA_ATTR uint32_t rtcBootOffset       = 0;    // sleep-wake counter, wiped on power-loss
 RTC_DATA_ATTR bool     rtcDeepSleepEnabled = false;
+// NTP-anchored forward-bias: intended next-wake Unix epoch, set in goToDeepSleep().
+// On wake, if NTP syncs, we compare actual wall time against this target and
+// subtract any overshoot from the next sleep so cycles self-correct.
+// Zero = no prior epoch stored (first boot or power-loss wiped RTC).
+RTC_DATA_ATTR uint32_t rtcNextWakeEpoch    = 0;
 
 // ── Static IP cache (RTC) — populated after first DHCP, reused on timer wakes
 // to skip DHCP negotiation and cut WiFi connect time from ~3s to ~400ms.
@@ -1235,19 +1339,50 @@ void goToDeepSleep() {
 
   powerDownPeripherals();
 
-  // ── Drift-corrected sleep timer ───────────────────────────────────────────
-  // Subtract the time we were awake from the sleep interval so each full
-  // cycle (wake + sleep) equals exactly deepSleepSeconds, regardless of how
-  // long WiFi connect, publish, and flush took. Clamps to 5s minimum so a
-  // very slow wake never produces a zero or negative sleep duration.
+  // ── NTP-anchored drift-corrected sleep timer ─────────────────────────────────────
+  // Layer 1 (millis): subtract wake-active time so software overhead does not
+  //                   accumulate — same as v5.35.
+  // Layer 2 (NTP):    compare actual wall time against stored target epoch.
+  //                   Overshoot (RTC oscillator slow → woke late) is subtracted
+  //                   so the next cycle lands on the exact target interval.
+  //                   Self-corrects the ESP32 RTC crystal error (~1-2%) that
+  //                   causes ~1-2 min drift per 120 min cycle.
+  //                   Falls back to millis-only subtraction if NTP unavailable.
   unsigned long wakeActiveMs  = millis() - bootTimeMs;
   unsigned long targetSleepMs = (unsigned long)deepSleepSeconds * 1000UL;
+
+  // Layer 1: millis wake-overhead subtraction (always applied)
   unsigned long actualSleepMs = (wakeActiveMs < targetSleepMs - 5000UL)
                                   ? (targetSleepMs - wakeActiveMs)
                                   : 5000UL;
+
+  // Layer 2: NTP forward-bias correction
+  if (ntpSynced && rtcNextWakeEpoch > 0) {
+    time_t nowEpoch = time(nullptr);
+    if (nowEpoch > 100000UL) {
+      long overshootSec = (long)nowEpoch - (long)rtcNextWakeEpoch;
+      if (overshootSec > 0 && overshootSec < (long)deepSleepSeconds) {
+        unsigned long overshootMs = (unsigned long)overshootSec * 1000UL;
+        actualSleepMs = (overshootMs + 5000UL < actualSleepMs)
+                          ? (actualSleepMs - overshootMs)
+                          : 5000UL;
+        Serial.printf("[SLEEP] NTP bias: overshoot=%lds corrected\n", overshootSec);
+      } else if (overshootSec <= 0) {
+        Serial.println(F("[SLEEP] NTP bias: on time"));
+      }
+    }
+  }
+  // Store next-wake epoch so the following cycle can self-correct
+  if (ntpSynced) {
+    time_t nowEpoch = time(nullptr);
+    if (nowEpoch > 100000UL)
+      rtcNextWakeEpoch = (uint32_t)(nowEpoch + actualSleepMs / 1000UL);
+  } else {
+    rtcNextWakeEpoch = 0;
+  }
+
   Serial.printf("[SLEEP] Wake was %lu ms — sleeping %lu ms (target %lu ms)\n",
                 wakeActiveMs, actualSleepMs, targetSleepMs);
-
   esp_sleep_enable_timer_wakeup((uint64_t)actualSleepMs * 1000ULL);
   esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);  // button wakes immediately
 
@@ -3495,7 +3630,7 @@ void setupOTA() {
       " <span style='color:#9e9e9e;font-size:12px'>(one message per sleep cycle)</span></label>"
       "<label class='cb'><input type='checkbox' name='ntfy_on_publish' style='width:auto'");
     if(ntfy_on_publish)h += F(" checked");
-    h += F("> Every periodic publish"
+    h += F("> On every sensor read"
       " <span style='color:#9e9e9e;font-size:12px'>(verbose)</span></label>"
       "<label>Server</label><input name='ntfy_server' value='");
     h += ntfy_server;
