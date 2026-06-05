@@ -1,8 +1,8 @@
 {
-  "version": "5.35",
-  "build_date": "2026-06-04",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.35/heltec_wifkit32v2_v535_78383730_firmware.ino.bin",
-  "size": 1407.6,
-  "crc32": "78383730",
-  "changelog": "Web UI countdown now synced FROM hardware"
+  "version": "5.36",
+  "build_date": "2026-06-05",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.36/heltec_wifkit32v2_v536_FE461303_firmware.ino.bin",
+  "size": 1408.5,
+  "crc32": "FE461303",
+  "changelog": "timer drift fixed wiht ntp lookup"
 }
