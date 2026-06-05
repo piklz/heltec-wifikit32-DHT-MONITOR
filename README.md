@@ -9,7 +9,8 @@ Can be used portably/remotely, on battery only, for a long time taking measureme
 [![Platform](https://img.shields.io/badge/Platform-ESP32-blue.svg)]()
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
 [![Power](https://img.shields.io/badge/Power-Ultra%20Low%20Efficiency-red.svg)]()
-[![End-to-End Automated Firmware and Manifest Sync](https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/actions/workflows/release.yml/badge.svg?event=release)](https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/actions/workflows/release.yml)
+[![Firmware Build Status](https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/actions/workflows/release.yml/badge.svg)](https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/actions/workflows/release.yml)
+
 
 <img width="320" height="166" alt="20260531_193225   w (Phone)" src="https://github.com/user-attachments/assets/490fc011-630f-4827-b02a-3f2033a771ec" />
 <img width="200" height="166" alt="61WbISgpAeL _AC_SX679_" src="https://github.com/user-attachments/assets/143f00e8-3563-4b12-8b9c-85e698ee4aa7" />
