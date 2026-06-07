@@ -1,8 +1,8 @@
 {
-  "version": "5.36",
-  "build_date": "2026-06-05",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.36/heltec_wifkit32v2_v536_FE461303_firmware.ino.bin",
+  "version": "5.37",
+  "build_date": "2026-06-07",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.37/heltec_wifkit32v2_v537_CE95AADE_firmware.ino.bin",
   "size": 1408.5,
-  "crc32": "FE461303",
-  "changelog": "timer drift fixed wiht ntp lookup"
+  "crc32": "CE95AADE",
+  "changelog": "time drifting fix rtc"
 }
