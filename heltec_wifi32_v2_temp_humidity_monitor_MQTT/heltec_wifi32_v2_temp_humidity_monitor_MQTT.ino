@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.37
- * Last Updated:  2026-06-07
+ * Version:       5.38
+ * Last Updated:  2026-06-12
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,21 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.38 — 2026-06-12
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: PPM compensation arithmetic overflow. Previous two-part integer split
+ *         (actualSleepMs % 1000000UL * RTC_CRYSTAL_PPM_FAST) overflows uint32 at
+ *         sleep durations >= ~128 min (200000 * 16500 = 3.3B, near 4.29B limit).
+ *         Replaced with single 64-bit multiply: (uint64_t)actualSleepMs * PPM /
+ *         1000000ULL — correct at any sleep duration, simpler code.
+ *  - FIX: /save_settings POST no longer fails to extend webUiExpiresAt. Header
+ *         comment stated "settings save resets this" but the code never did it;
+ *         saving settings while close to timeout caused immediate deep sleep.
+ *  - FIX: Add /sleep_now endpoint — sends clean goodbye page then sleeps,
+ *         eliminating the browser hang when the device disappears mid-request at
+ *         the 10-min timeout. Sleep Now button added to countdown banner.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.37 — 2026-06-07
@@ -102,7 +117,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.37"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.38"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1286,9 +1301,10 @@ void goToDeepSleep() {
   // Apply measured RTC fast-offset so the requested sleep duration equals the
   // intended wall-clock interval. Runs every cycle, no NTP required.
   // actualSleepMs * (1 + 16500/1e6) ≈ actualSleepMs * 1.01650
+  // Cast to uint64_t before multiply — the previous two-part split overflowed
+  // uint32 at sleep durations ≥ ~128 min (200000 * 16500 = 3.3B > 4.29B limit).
   #if RTC_CRYSTAL_PPM_FAST > 0
-  actualSleepMs = actualSleepMs + (actualSleepMs / 1000000UL * RTC_CRYSTAL_PPM_FAST)
-                                + (actualSleepMs % 1000000UL * RTC_CRYSTAL_PPM_FAST / 1000000UL);
+  actualSleepMs += (uint32_t)(((uint64_t)actualSleepMs * RTC_CRYSTAL_PPM_FAST) / 1000000ULL);
   #endif
 
   Serial.printf("[SLEEP] Wake was %lu ms — sleeping %lu ms (target %lu ms)\n",
@@ -2075,7 +2091,11 @@ static String pageHead(const String& title) {
       // ── Web UI countdown banner — shown only when deep sleep is enabled ──────
       "<div id='_wucb' style='display:none;text-align:center;padding:5px 10px;margin-bottom:6px;"
       "border-radius:6px;font-size:12px;font-weight:600;background:#1f1f1f;color:#888'>"
-      "&#x23F1; Web UI active: <span id='_wuct'>--:--</span></div>"
+      "&#x23F1; Web UI active: <span id='_wuct'>--:--</span>"
+      "&nbsp;&nbsp;<a href='/sleep_now' style='font-size:11px;font-weight:600;color:#888;"
+      "border:1px solid #444;border-radius:4px;padding:2px 8px;text-decoration:none;"
+      "vertical-align:middle' title='Sleep immediately'>&#x1F4A4; Sleep Now</a>"
+      "</div>"
       "<script>"
       "(function(){"
       "var _s=0,_ds=false;"
@@ -3752,6 +3772,7 @@ void setupOTA() {
     mqttStd.disconnect(); mqttAIO.disconnect(); mqttUBI.disconnect();
     mqttStandardConnected=mqttAdafruitConnected=mqttUbidotsConnected=false;
     stdRetries=aioRetries=ubiRetries=0;
+    disableDeepSleepUntil = millis() + 10UL * 60UL * 1000UL;  // reset window — user is active
     server.send(200,F("text/html"),actionPage("&#x2705;","Settings Saved","Reconnecting to MQTT...",4));
   });
 
@@ -3852,6 +3873,20 @@ void setupOTA() {
         String(names[p]) + " running for 10 seconds.<br>"
         "Press device button to dismiss early.",
         12, "/settings"));
+  });
+
+  // ── /sleep_now — immediate voluntary sleep from web UI ───────────────────
+  // Sends a clean goodbye page then collapses the webUiExpiresAt window so
+  // the loop() sleep gate fires within one iteration. Prevents the browser
+  // hang that occurs when the device disappears mid-request at timeout.
+  server.on("/sleep_now", HTTP_GET, []() {
+    server.send(200, F("text/html"),
+      actionPage("&#x1F4A4;", "Going to Sleep",
+        "Device will sleep in ~2 seconds.<br>Timer wake or button to resume.", 0));
+    server.client().stop();                     // flush response before we disappear
+    delay(200);
+    webUiExpiresAt = millis() - 1;              // expire window immediately
+    goToDeepSleep();
   });
 
   // ── /api/status — lightweight JSON polled by web UI for live countdown ──────
