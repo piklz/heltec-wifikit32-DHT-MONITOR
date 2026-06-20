@@ -1,8 +1,8 @@
 {
   "version": "5.39",
-  "build_date": "2026-06-07",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.37/heltec_wifkit32v2_v537_CE95AADE_firmware.ino.bin",
-  "size": 1408.5,
-  "crc32": "CE95AADE",
+  "build_date": "2026-06-20",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.39/heltec_wifkit32v2_v539_6696AA92_firmware.ino.bin",
+  "size": 1410.7,
+  "crc32": "6696AA92",
   "changelog": " added powered on uptime"
 }
