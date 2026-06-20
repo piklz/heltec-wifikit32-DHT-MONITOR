@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.38
- * Last Updated:  2026-06-12
+ * Version:       5.39
+ * Last Updated:  2026-06-20
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,20 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.39 — 2026-06-20
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: True wall-clock "powered on" uptime, separate from getUptime() (which
+ *         is millis()-based and resets every deep-sleep wake). New rtcBootEpoch
+ *         (RTC_DATA_ATTR) latches the NTP epoch at power-on via markBootEpoch();
+ *         getTotalUptime() returns time(nullptr) - rtcBootEpoch.
+ *  - UI:  OLED Frame 2 bottom line now shows total power-on uptime ("On:")
+ *         instead of wake-session uptime. Web dashboard shows both: "Up (this
+ *         wake)" and "On (total)".
+ *  - MQTT: doc["uptime_total_s"] added to both sensor publish and boot-summary
+ *          payloads (standard platform).
+ *  - NTFY: boot/wake notification message gets a new "On: <total>" line.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.38 — 2026-06-12
@@ -117,7 +131,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.38"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.39"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -317,6 +331,11 @@ uint32_t ps_cpu_wake_mhz = 240; // CPU MHz to use during the wake window
 // while the displayed counter still increments on every wake for continuity.
 RTC_DATA_ATTR uint32_t rtcBootOffset       = 0;    // sleep-wake counter, wiped on power-loss
 RTC_DATA_ATTR bool     rtcDeepSleepEnabled = false;
+// Unix epoch of power-on, set once on first NTP sync after a power-on/crash.
+// Survives deep-sleep wakes (RTC memory), zeroed on power-loss/reset — same
+// lifecycle as rtcBootOffset. (time(nullptr) - rtcBootEpoch) = true wall-clock
+// "powered on" duration, unlike getUptime() which resets every wake.
+RTC_DATA_ATTR uint32_t rtcBootEpoch        = 0;
 // NTP-anchored forward-bias: intended next-wake Unix epoch, set in goToDeepSleep().
 // On wake, if NTP syncs, we compare actual wall time against this target and
 // subtract any overshoot from the next sleep so cycles self-correct.
@@ -571,6 +590,30 @@ WiFiManagerParameter p_ds_min   ("deep_min",  "Wake every (min)",    "10",      
 String getUptime() {
   unsigned long t = millis() / 1000;
   int d = t / 86400, h = (t % 86400) / 3600, m = (t % 3600) / 60, s = t % 60;
+  String u = "";
+  if (d) u += String(d) + "d ";
+  if (h || d) u += String(h) + "h ";
+  if (m || h || d) u += String(m) + "m ";
+  u += String(s) + "s";
+  return u;
+}
+
+// On the first successful NTP sync after a power-on/crash, latch the wall-clock
+// boot epoch into RTC memory. No-op on later wakes (rtcBootEpoch already set) or
+// if NTP hasn't synced yet. Call right after any `ntpSynced = true;`.
+void markBootEpoch() {
+  if (rtcBootEpoch == 0 && ntpSynced) {
+    rtcBootEpoch = (uint32_t)time(nullptr);
+    Serial.printf("[UPTIME] Boot epoch latched: %u\n", rtcBootEpoch);
+  }
+}
+
+// True wall-clock time since power-on (survives deep sleep, unlike getUptime()).
+// Returns "syncing..." until NTP has synced at least once since power-on.
+String getTotalUptime() {
+  if (!ntpSynced || rtcBootEpoch == 0) return "syncing...";
+  uint32_t t = (uint32_t)time(nullptr) - rtcBootEpoch;
+  uint32_t d = t / 86400, h = (t % 86400) / 3600, m = (t % 3600) / 60, s = t % 60;
   String u = "";
   if (d) u += String(d) + "d ";
   if (h || d) u += String(h) + "h ";
@@ -1386,8 +1429,8 @@ void drawFrame2(ScreenDisplay *d, DisplayUiState *s, int16_t x, int16_t y) {
     d->drawString(0 + x, 23 + y, "WiFi: Disconnected");
     d->drawString(0 + x, 33 + y, "AP: ESP32-Setup");
   }
-  // Bottom line: uptime or web UI countdown if window is active
-  String bot = "Up: " + getUptime();
+  // Bottom line: total power-on uptime, or web UI countdown if window is active
+  String bot = "On: " + getTotalUptime();
   if (webUiExpiresAt > millis()) {
     unsigned long msLeft = webUiExpiresAt - millis();
     if (msLeft < 120000UL) {
@@ -1614,6 +1657,7 @@ void setupWiFiManager(bool forcePortal) {
         currentTimeStr = String(_tb);
         currentDateStr = String(_db);
         ntpSynced = true;
+        markBootEpoch();
         Serial.println("[NTP] Synced (fast path): " + currentDateStr + " " + currentTimeStr);
       } else {
         Serial.println(F("[NTP] Sync pending — will retry on read"));
@@ -1709,6 +1753,7 @@ void setupWiFiManager(bool forcePortal) {
     currentTimeStr = String(_tb);
     currentDateStr = String(_db);
     ntpSynced = true;
+    markBootEpoch();
     Serial.println("[NTP] Synced: " + currentDateStr + " " + currentTimeStr);
   } else { Serial.println(F("[NTP] Sync failed")); }
   // Clear the DRD flag now that we've connected successfully —
@@ -1835,6 +1880,7 @@ void publishSensorData() {
     doc["temperature"] = temperature;
     doc["humidity"]    = humidity;
     doc["uptime"]      = millis() / 1000;
+    doc["uptime_total_s"] = (ntpSynced && rtcBootEpoch) ? (uint32_t)time(nullptr) - rtcBootEpoch : 0;
     doc["boot_count"]  = bootCount;
     doc["batt_v"]      = serialized(String(battV, 2));
     doc["batt_pct"]    = batteryPercentage;
@@ -1906,6 +1952,7 @@ void publishBootSummary() {
     doc["version"]      = FW_VERSION;
     doc["boot_count"]   = bootCount;
     doc["sleep_wakes"]  = (uint32_t)rtcBootOffset;
+    doc["uptime_total_s"] = (ntpSynced && rtcBootEpoch) ? (uint32_t)time(nullptr) - rtcBootEpoch : 0;
     doc["wakeup"]       = reason;
     doc["wake_mode"]    = (wakeDisplayMode == 0) ? "stealth" : "active";
     doc["ip"]           = WiFi.localIP().toString();
@@ -1968,6 +2015,7 @@ void publishBootSummary() {
                  "Temp: " + String(temperature, 1) + "C  Hum: " + String(humidity, 1) + "%\n"
                  "Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
                  "Wake: " + reason + "  Mode: " + modeStr + "  Boot#" + String(bootCount) + "\n"
+                 "On: " + getTotalUptime() + "\n"
                  "IP: " + WiFi.localIP().toString() + "  v" + FW_VERSION;
     int est = estSleepsRemaining();
     if (est >= 0) msg += "\n~" + String(est) + " sleeps remaining";
@@ -2033,6 +2081,7 @@ void readSensor() {
     struct tm _ntr;
     if (getLocalTime(&_ntr, 1500)) {
       ntpSynced = true;
+      markBootEpoch();
       Serial.println(F("[NTP] Synced on read retry"));
     }
   }
@@ -2979,9 +3028,12 @@ void setupOTA() {
       h += F("--/-- --:--"); 
     }
     h += F("</span><br><span style='color:#9e9e9e;font-size:12px'>"
-      "Up: ");
+      "Up (this wake): ");
     h += getUptime();
-    h += F(" &nbsp;&#x23F1;</span></div>");
+    h += F(" &nbsp;&#x23F1;</span><br><span style='color:#9e9e9e;font-size:12px'>"
+      "On (total): ");
+    h += getTotalUptime();
+    h += F(" &nbsp;&#x1F50C;</span></div>");
 
     // WiFi
     h += F("</div>");  // close grid
@@ -4251,6 +4303,7 @@ void setup() {
   } else {
     // Power-on or crash: RTC was wiped, write NVS — this is the event worth tracking
     rtcBootOffset = 0;
+    rtcBootEpoch  = 0;   // fresh power-on duration tracking starts now
     preferences.begin("sys", false);
     uint32_t nvsBase = (uint32_t)preferences.getInt("bootcount", 0) + 1;
     preferences.putInt("bootcount", (int)nvsBase);
