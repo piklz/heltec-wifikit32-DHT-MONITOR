@@ -1,8 +1,8 @@
 {
-  "version": "5.39",
-  "build_date": "2026-06-20",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.39/heltec_wifkit32v2_v539_6696AA92_firmware.ino.bin",
+  "version": "5.40",
+  "build_date": "2026-06-22",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.40/heltec_wifkit32v2_v540_E073BBBB_firmware.ino.bin",
   "size": 1410.7,
-  "crc32": "6696AA92",
-  "changelog": " added powered on uptime"
+  "crc32": "E073BBBB",
+  "changelog": "rtcBootEpoch incorrectly zeroed on OTA reboots "
 }
