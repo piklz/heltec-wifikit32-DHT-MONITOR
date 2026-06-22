@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.39
- * Last Updated:  2026-06-20
+ * Version:       5.40
+ * Last Updated:  2026-06-22
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,19 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.40 — 2026-06-22
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: rtcBootEpoch incorrectly zeroed on OTA reboots (ESP.restart()), panics,
+ *         and WDT resets, causing "On:" uptime to reset mid-run (15h → 1s observed).
+ *         Root cause: else branch in boot counter logic zeroed rtcBootEpoch for ALL
+ *         non-sleep wakeups. Fix: only zero on ESP_RST_POWERON / ESP_RST_BROWNOUT,
+ *         where RTC memory is physically wiped. Soft resets preserve RTC memory and
+ *         now correctly carry the epoch forward.
+ *  - FIX: getTotalUptime() cosmetic — hours/minutes could be suppressed at sub-day
+ *         durations due to implicit formatter logic. Expanded to explicit uint32_t
+ *         vars with clear suppression rules; "15h 3m 22s" now renders correctly.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.39 — 2026-06-20
@@ -131,7 +144,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.39"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.40"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -610,14 +623,19 @@ void markBootEpoch() {
 
 // True wall-clock time since power-on (survives deep sleep, unlike getUptime()).
 // Returns "syncing..." until NTP has synced at least once since power-on.
+// Format: "Xd Xh Xm Xs" — components suppressed only when zero AND no larger
+// unit is present. Examples: "15h 3m 22s", "2d 0h 5m 10s", "4m 8s", "45s".
 String getTotalUptime() {
   if (!ntpSynced || rtcBootEpoch == 0) return "syncing...";
   uint32_t t = (uint32_t)time(nullptr) - rtcBootEpoch;
-  uint32_t d = t / 86400, h = (t % 86400) / 3600, m = (t % 3600) / 60, s = t % 60;
+  uint32_t d = t / 86400;
+  uint32_t h = (t % 86400) / 3600;
+  uint32_t m = (t % 3600) / 60;
+  uint32_t s = t % 60;
   String u = "";
-  if (d) u += String(d) + "d ";
-  if (h || d) u += String(h) + "h ";
-  if (m || h || d) u += String(m) + "m ";
+  if (d)      { u += String(d) + "d "; }
+  if (h || d) { u += String(h) + "h "; }   // always show h once days appear
+  if (m || h || d) { u += String(m) + "m "; }
   u += String(s) + "s";
   return u;
 }
@@ -4301,9 +4319,18 @@ void setup() {
     Serial.printf("[BOOT] Sleep wake — count %d (NVS base + RTC offset %u, no flash write)\n",
                   bootCount, rtcBootOffset);
   } else {
-    // Power-on or crash: RTC was wiped, write NVS — this is the event worth tracking
+    // Non-sleep wakeup: power-on, crash, WDT, OTA reboot, etc.
+    // RTC memory is physically wiped ONLY on true power-on / brownout; all soft
+    // resets (ESP.restart, panic, WDT) preserve it. So only zero rtcBootEpoch
+    // on true power events — otherwise an OTA reboot or WDT would silently reset
+    // the "powered on" clock mid-run.
     rtcBootOffset = 0;
-    rtcBootEpoch  = 0;   // fresh power-on duration tracking starts now
+    esp_reset_reason_t rstReason = esp_reset_reason();
+    bool truePowerEvent = (rstReason == ESP_RST_POWERON || rstReason == ESP_RST_BROWNOUT);
+    if (truePowerEvent) {
+      rtcBootEpoch = 0;   // RTC truly wiped — fresh power-on tracking starts now
+    }
+    // else: rtcBootEpoch kept from RTC memory (OTA/crash/WDT — still valid)
     preferences.begin("sys", false);
     uint32_t nvsBase = (uint32_t)preferences.getInt("bootcount", 0) + 1;
     preferences.putInt("bootcount", (int)nvsBase);
