@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.42
+ * Version:       5.43
  * Last Updated:  2026-06-23
  * License:       MIT
  *
@@ -29,6 +29,13 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.43 — 2026-06-23
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Build error — tempOk/humOk are local to readSensor() but were
+ *         referenced in publishSensorData() (a separate function). Replaced
+ *         with the same !isnan() && != 0.0f guard used in publishBootSummary().
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.42 — 2026-06-23
@@ -75,47 +82,6 @@
  *  - FIX: getTotalUptime() cosmetic — hours/minutes could be suppressed at sub-day
  *         durations due to implicit formatter logic. Expanded to explicit uint32_t
  *         vars with clear suppression rules; "15h 3m 22s" now renders correctly.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.39 — 2026-06-20
- * ─────────────────────────────────────────────────────────────────────────────
- *  - NEW: True wall-clock "powered on" uptime, separate from getUptime() (which
- *         is millis()-based and resets every deep-sleep wake). New rtcBootEpoch
- *         (RTC_DATA_ATTR) latches the NTP epoch at power-on via markBootEpoch();
- *         getTotalUptime() returns time(nullptr) - rtcBootEpoch.
- *  - UI:  OLED Frame 2 bottom line now shows total power-on uptime ("On:")
- *         instead of wake-session uptime. Web dashboard shows both: "Up (this
- *         wake)" and "On (total)".
- *  - MQTT: doc["uptime_total_s"] added to both sensor publish and boot-summary
- *          payloads (standard platform).
- *  - NTFY: boot/wake notification message gets a new "On: <total>" line.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.38 — 2026-06-12
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: PPM compensation arithmetic overflow. Previous two-part integer split
- *         (actualSleepMs % 1000000UL * RTC_CRYSTAL_PPM_FAST) overflows uint32 at
- *         sleep durations >= ~128 min (200000 * 16500 = 3.3B, near 4.29B limit).
- *         Replaced with single 64-bit multiply: (uint64_t)actualSleepMs * PPM /
- *         1000000ULL — correct at any sleep duration, simpler code.
- *  - FIX: /save_settings POST no longer fails to extend webUiExpiresAt. Header
- *         comment stated "settings save resets this" but the code never did it;
- *         saving settings while close to timeout caused immediate deep sleep.
- *  - FIX: Add /sleep_now endpoint — sends clean goodbye page then sleeps,
- *         eliminating the browser hang when the device disappears mid-request at
- *         the 10-min timeout. Sleep Now button added to countdown banner.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.37 — 2026-06-07
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: RTC crystal PPM compensation. v5.36 NTP-bias correction requires
- *         ntpSynced=true at sleep time — the 2s NTP wait frequently times out
- *         on timer wakes so the correction never fired. Root cause confirmed:
- *         the onboard RTC crystal runs +16,500 PPM fast (measured: 118.02 min
- *         actual vs 120 min target over 6 cycles). Fix: RTC_CRYSTAL_PPM_FAST
- *         define applies a proportional multiplier to actualSleepMs every cycle
- *         from first boot, with no NTP dependency. Tune the constant if the
- *         crystal offset changes (e.g. significant temperature shift).
  *
  *
  */
@@ -177,7 +143,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.42"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.43"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1978,8 +1944,8 @@ void publishSensorData() {
   // Optional ntfy on each publish — ASCII safe, no degree symbol
   if (ntfy_enabled && ntfy_on_publish) {
     float battV2 = batteryVoltFloat / 1000.0f;
-    String tStr = (tempOk && !isnan(temperature)) ? String(temperature, 1) + "C" : "--";
-    String hStr = (humOk  && !isnan(humidity))    ? String(humidity,    1) + "%" : "--";
+    String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "C" : "--";
+    String hStr = (!isnan(humidity)    && humidity    != 0.0f) ? String(humidity,    1) + "%" : "--";
     String msg = device_name + "\n"
                  "Temp: " + tStr + "  Hum: " + hStr + "\n"
                  "Batt: " + String(battV2, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr();
