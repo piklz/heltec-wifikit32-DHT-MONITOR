@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.41
+ * Version:       5.42
  * Last Updated:  2026-06-23
  * License:       MIT
  *
@@ -29,6 +29,18 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.42 — 2026-06-23
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - UI:  Publish Interval settings input replaced with number + unit picker
+ *         (Minutes / Hours / Days). JS reverse-converts stored seconds to the
+ *         most natural unit on load (whole days → days, whole hours → hours,
+ *         else minutes). On submit packs val×unit back to seconds into a hidden
+ *         pub_timer field — server-side parse unchanged.
+ *         Max extended 1h → 7 days (604800s). Min raised 30s → 60s.
+ *         All 4 constrain() calls updated: boot load, settings save, WiFiManager
+ *         portal field + save callback. WiFiManager buffer + setValue size bumped.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.41 — 2026-06-23
@@ -165,7 +177,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.41"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.42"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -599,8 +611,8 @@ WiFiManagerParameter p_user     ("user",      "MQTT User",           "",        
 WiFiManagerParameter p_pass     ("pass",      "MQTT Password",       "",              40);
 WiFiManagerParameter p_topic    ("topic",     "MQTT Topic",          "esp32/sensor",  50);
 WiFiManagerParameter p_name     ("name",      "Device Name",         "ESP32-Sensor",  30);
-WiFiManagerParameter p_timer    ("pub_timer", "Publish every (sec)", "600",             5,
-                                 "type='number' min='30' max='3600'");
+WiFiManagerParameter p_timer    ("pub_timer", "Publish every (sec)", "600",             7,
+                                 "type='number' min='60' max='604800'");
 WiFiManagerParameter h_aio      ("<h4 style='color:#64B5F6;border-bottom:2px solid #64B5F6;"
                                  "padding-bottom:5px;margin-top:10px'>Adafruit IO</h4>");
 WiFiManagerParameter p_aio_user ("aio_user",  "AIO Username",        "",              40);
@@ -754,7 +766,7 @@ void loadDeepSleepConfig() {
   if (wakeDisplayMode > 1) wakeDisplayMode = 1;
   deepSleepMinutes = max((uint32_t)1, deepSleepMinutes);
   deepSleepSeconds = deepSleepMinutes * 60UL;
-  publishSeconds   = constrain(publishSeconds, 30UL, 3600UL);
+  publishSeconds   = constrain(publishSeconds, 60UL, 604800UL);
   readInterval     = publishSeconds * 1000UL;
 
   // Mirror to RTC so wakeup path can check without reading NVS
@@ -763,7 +775,7 @@ void loadDeepSleepConfig() {
   // Sync WiFiManager parameter display values
   p_ds_en.setValue(deepSleepEnabled ? "1" : "0", 2);
   p_ds_min.setValue(String(deepSleepMinutes).c_str(), 5);
-  p_timer.setValue(String(publishSeconds).c_str(), 5);
+  p_timer.setValue(String(publishSeconds).c_str(), 7);
 }
 
 // Save all MQTT settings in one clean begin/end block
@@ -1649,7 +1661,7 @@ void saveConfigCallback() {
   ubidots_token  = p_ubi_tok.getValue();
   ubidots_device = p_ubi_dev.getValue();
 
-  publishSeconds = constrain((unsigned long)String(p_timer.getValue()).toInt(), 30UL, 3600UL);
+  publishSeconds = constrain((unsigned long)String(p_timer.getValue()).toInt(), 60UL, 604800UL);
   readInterval   = publishSeconds * 1000UL;
 
   String dsVal = String(p_ds_en.getValue());
@@ -3598,10 +3610,33 @@ void setupOTA() {
     }
     h += F("</select></div>"
       "<div class='sec'><h2>Publish Interval</h2>"
-      "<label>Publish every (seconds)</label>"
-      "<input type='number' name='pub_timer' value='");
+      "<label>Publish every</label>"
+      "<div style='display:flex;gap:8px;align-items:center'>"
+      "<input type='number' id='pi_val' name='pi_val' min='1' max='999' style='width:90px' value='1'>"
+      "<select id='pi_unit' name='pi_unit' style='width:auto'>"
+      "<option value='60'>Minutes</option>"
+      "<option value='3600'>Hours</option>"
+      "<option value='86400'>Days</option>"
+      "</select></div>"
+      "<div class='info' style='margin-top:8px'>Min 1 minute &mdash; max 7 days."
+      " Sub-60s not useful (WiFi connect + sensor read ~15s overhead).</div>"
+      "<input type='hidden' name='pub_timer' id='pub_timer'>"
+      "<script>(function(){"
+      "var s=");
     h += String(publishSeconds);
-    h += F("' min='30' max='3600'></div>"
+    h += F(";"
+      "var uv,un;"
+      "if(s%86400===0&&s>=86400){uv=s/86400;un=86400;}"
+      "else if(s%3600===0&&s>=3600){uv=s/3600;un=3600;}"
+      "else{uv=Math.max(1,Math.round(s/60));un=60;}"
+      "document.getElementById('pi_val').value=uv;"
+      "document.getElementById('pi_unit').value=un;"
+      "var fm=document.querySelector('form');"
+      "if(fm)fm.addEventListener('submit',function(){"
+      "var v=parseInt(document.getElementById('pi_val').value)||1;"
+      "var u=parseInt(document.getElementById('pi_unit').value)||60;"
+      "document.getElementById('pub_timer').value=Math.max(60,Math.min(604800,v*u));"
+      "});})();</script></div>"
       "<div class='sec'><h2>Standard MQTT</h2>"
       "<div class='info'>Local broker e.g. Mosquitto</div>"
       "<label>Server</label><input name='mqtt_server' value='");
@@ -3846,7 +3881,7 @@ void setupOTA() {
     if(server.hasArg("ubi_token"))     ubidots_token =server.arg("ubi_token");
     if(server.hasArg("ubi_device"))    ubidots_device=server.arg("ubi_device");
     if(server.hasArg("pub_timer")){
-      publishSeconds=constrain((unsigned long)server.arg("pub_timer").toInt(),30UL,3600UL);
+      publishSeconds=constrain((unsigned long)server.arg("pub_timer").toInt(),60UL,604800UL);
       readInterval=publishSeconds*1000UL;
     }
     deepSleepEnabled=server.hasArg("deep_enable");

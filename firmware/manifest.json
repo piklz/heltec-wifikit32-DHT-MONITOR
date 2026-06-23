@@ -1,8 +1,8 @@
 {
-  "version": "5.40",
+  "version": "5.42",
   "build_date": "2026-06-22",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.40/heltec_wifkit32v2_v540_E073BBBB_firmware.ino.bin",
   "size": 1410.7,
   "crc32": "E073BBBB",
-  "changelog": "rtcBootEpoch incorrectly zeroed on OTA reboots "
+  "changelog": "ux improved for timer setting &autoredirect to dash added/fixed "
 }
