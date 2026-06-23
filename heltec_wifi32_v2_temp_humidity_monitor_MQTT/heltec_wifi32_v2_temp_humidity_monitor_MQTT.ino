@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.40
- * Last Updated:  2026-06-22
+ * Version:       5.41
+ * Last Updated:  2026-06-23
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,27 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.41 — 2026-06-23
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: readSensor() — 3-attempt retry loop replacing single-attempt bail.
+ *         Per-channel (tempOk/humOk): a good read is locked in and not re-read.
+ *         2s delay between attempts (DHT22 min sample period). Attempt 1 almost
+ *         always fails on timer wakes (Vext cut during sleep, 20ms rail delay is
+ *         insufficient). Worst case 4s added awake time. On total failure falls
+ *         through and publishes last-known globals rather than returning silently.
+ *  - FIX: Trend calculation corrected — now compares newTemp/newHum against the
+ *         prior global BEFORE committing, not after (was always computing delta=0).
+ *  - FIX: ntfy messages (publishBootSummary + publishSensorData) guard against
+ *         zero/NaN values — renders "--" instead of "0.0C / 0.0%" on failed reads.
+ *  - UI:  actionPage() upgraded — live "Returning to dashboard in Xs..." countdown
+ *         text shown beneath the shrink bar on all action/confirmation pages.
+ *  - UI:  ota_install + ota_reinstall pages replaced blind meta http-equiv refresh
+ *         with JS countdown bar + visible timer + "Back now" link (60s, matches
+ *         max GitHub download time).
+ *  - UI:  OTA manual upload success countdown extended 20s → 60s; countdown text
+ *         updated to "Returning to dashboard in Xs..." for consistency.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.40 — 2026-06-22
@@ -144,7 +165,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.40"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.41"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1945,8 +1966,10 @@ void publishSensorData() {
   // Optional ntfy on each publish — ASCII safe, no degree symbol
   if (ntfy_enabled && ntfy_on_publish) {
     float battV2 = batteryVoltFloat / 1000.0f;
+    String tStr = (tempOk && !isnan(temperature)) ? String(temperature, 1) + "C" : "--";
+    String hStr = (humOk  && !isnan(humidity))    ? String(humidity,    1) + "%" : "--";
     String msg = device_name + "\n"
-                 "Temp: " + String(temperature, 1) + "C  Hum: " + String(humidity, 1) + "%\n"
+                 "Temp: " + tStr + "  Hum: " + hStr + "\n"
                  "Batt: " + String(battV2, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr();
     sendNtfy("Sensor: " + device_name, msg, 2, "thermometer");
   }
@@ -2029,8 +2052,10 @@ void publishBootSummary() {
                    :                 "battery";
     String modeStr = (wakeDisplayMode == 0) ? "Stealth" : "Active";
 
+    String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "C" : "--";
+    String hStr = (!isnan(humidity)    && humidity    != 0.0f) ? String(humidity,    1) + "%" : "--";
     String msg = device_name + "\n"
-                 "Temp: " + String(temperature, 1) + "C  Hum: " + String(humidity, 1) + "%\n"
+                 "Temp: " + tStr + "  Hum: " + hStr + "\n"
                  "Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
                  "Wake: " + reason + "  Mode: " + modeStr + "  Boot#" + String(bootCount) + "\n"
                  "On: " + getTotalUptime() + "\n"
@@ -2047,37 +2072,58 @@ void publishBootSummary() {
   Serial.println("[BOOT] Summary published");
 }
 
-// Reads DHT22, logs to Serial, publishes, sets sleep trigger flag
+// Reads DHT22, logs to Serial, publishes, sets sleep trigger flag.
+// Retries up to 3 attempts (DHT22 min sample period = 2s; Vext is cut during
+// deep sleep so attempt 1 almost always fails on timer wakes — 20ms rail
+// stabilise is nowhere near the 1s+ the sensor needs after power-on).
+// Per-channel tracking: once a value is good it is kept and not re-read.
+// If both channels still NaN after attempt 3 we fall through, publish
+// whatever globals hold (last-known or 0 on first boot) and sleep.
+// Worst-case added awake time: 4 s (two failed retries, both channels).
 void readSensor() {
   sensors_event_t ev;
-  bool ok = true;
   float newTemp = NAN, newHum = NAN;
-  dht.temperature().getEvent(&ev);
-  if (isnan(ev.temperature)) ok = false; else newTemp = ev.temperature;
-  dht.humidity().getEvent(&ev);
-  if (isnan(ev.relative_humidity)) ok = false; else newHum = ev.relative_humidity;
+  bool tempOk = false, humOk = false;
 
-  if (!ok) {
-    Serial.println("[DHT] Read failed — sleep trigger still set");
-    lastSensorPublishTime = millis();
-    triggerDeepSleepAfterPublish = true;
-    return;
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    if (!tempOk) {
+      dht.temperature().getEvent(&ev);
+      if (!isnan(ev.temperature)) { newTemp = ev.temperature; tempOk = true; }
+    }
+    if (!humOk) {
+      dht.humidity().getEvent(&ev);
+      if (!isnan(ev.relative_humidity)) { newHum = ev.relative_humidity; humOk = true; }
+    }
+    if (tempOk && humOk) break;
+    if (attempt < 3) {
+      Serial.printf("[DHT] Attempt %d incomplete (T:%s H:%s) — retrying in 2s\n",
+                    attempt, tempOk ? "ok" : "NaN", humOk ? "ok" : "NaN");
+      delay(2000);
+    }
   }
 
-  // ── Trend: compare new vs previous reading, honouring dead-band ─────────────
-  if (!isnan(temperature) && temperature != 0.0f) {
+  if (!tempOk && !humOk) {
+    Serial.println("[DHT] All 3 attempts failed — publishing stale/zero values and sleeping");
+  } else if (!tempOk || !humOk) {
+    Serial.printf("[DHT] Partial read — T:%s H:%s — publishing what we have\n",
+                  tempOk ? String(newTemp, 1).c_str() : "NaN",
+                  humOk  ? String(newHum,  1).c_str() : "NaN");
+  }
+
+  // Commit whichever channels succeeded; failed channels keep their prior global
+  // ── Trend: compare new reading vs current global (prior reading) ─────────────
+  if (tempOk && !isnan(temperature) && temperature != 0.0f) {
     float dt = newTemp - temperature;
     trendTemp = (dt >  TREND_DEAD_TEMP) ?  1 :
                 (dt < -TREND_DEAD_TEMP) ? -1 : 0;
   }
-  if (!isnan(humidity) && humidity != 0.0f) {
+  if (humOk && !isnan(humidity) && humidity != 0.0f) {
     float dh = newHum - humidity;
     trendHumidity = (dh >  TREND_DEAD_HUM) ?  1 :
                     (dh < -TREND_DEAD_HUM) ? -1 : 0;
   }
-
-  temperature = newTemp;
-  humidity    = newHum;
+  if (tempOk) temperature = newTemp;
+  if (humOk)  humidity    = newHum;
   Serial.printf("[DHT] %.1f°C  %.1f%%\n", temperature, humidity);
   {
     struct tm ti; time_t now = 0;
@@ -2210,19 +2256,25 @@ String actionPage(const String& icon,const String& msg,const String& sub,int sec
     "width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.4)}"
     ".ic{font-size:48px;margin-bottom:16px}h2{color:#64B5F6;margin-bottom:8px}"
     "p{color:#9e9e9e;font-size:14px;margin-bottom:20px}"
-    ".bw{background:#1f1f1f;border-radius:6px;overflow:hidden;height:6px;margin-bottom:16px}"
+    ".bw{background:#1f1f1f;border-radius:6px;overflow:hidden;height:6px;margin-bottom:8px}"
     ".bar{height:6px;background:#64B5F6}"
+    ".cd{font-size:12px;color:#616161;margin-bottom:16px}"
     "a{display:inline-block;background:#64B5F6;color:#000;padding:10px 22px;"
     "border-radius:6px;text-decoration:none;font-weight:600;font-size:14px}"
     "</style>"))
     +"<script>var _t="+s+",_d='"+dest+"';"
-    "var _b=document.querySelector('.bar');"
-    "var _i=setInterval(function(){"
-    "_t--;if(_b)_b.style.width=((_t/"+s+")*100)+'%';"
-    "if(_t<=0){clearInterval(_i);location.href=_d;}},1000);</script>"
+    "function _tick(){"
+    "  var b=document.querySelector('.bar');"
+    "  var c=document.getElementById('_cd');"
+    "  if(b)b.style.width=((_t/"+s+")*100)+'%';"
+    "  if(c)c.textContent='Returning to dashboard in '+_t+'s\u2026';"
+    "  if(_t<=0){location.href=_d;return;}"
+    "  _t--;setTimeout(_tick,1000);}"
+    "window.onload=_tick;</script>"
     "<body><div class='box'><div class='ic'>"+icon+"</div>"
     "<h2>"+msg+"</h2><p>"+sub+"</p>"
     "<div class='bw'><div class='bar' style='width:100%;transition:width 1s linear'></div></div>"
+    "<div class='cd' id='_cd'></div>"
     "<a href='"+dest+"'>&#8592; Back now</a>"
     "</div></body></html>";
 }
@@ -2502,11 +2554,11 @@ f.onsubmit=async function(e){
       st.className='status success';
       st.innerHTML='&#x2705; <strong>Update Successful!</strong><br>'
         +'Device is rebooting and applying the new firmware.<br>'
-        +'OLED will show confirmation. Reconnecting in 20s&hellip;';
+        +'OLED will show confirmation. Reconnecting in 60s&hellip;';
       st.style.display='block';
-      var countdown=20;
+      var countdown=60;
       var iv=setInterval(function(){
-        countdown--;cd.textContent='Redirecting in '+countdown+'s…';
+        countdown--;cd.textContent='Returning to dashboard in '+countdown+'s\u2026';
         if(countdown<=0){clearInterval(iv);cd.textContent='';location.href='/';}
       },1000);
     } else {
@@ -3995,19 +4047,34 @@ void setupOTA() {
       server.send(400, F("text/plain"), F("No download URL — run Check Updates first."));
       return;
     }
-    String h = String(F("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Re-flashing</title>"))
-      + F("<meta http-equiv='refresh' content='60;url=/'>"
+    String h = String(F("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Re-flashing</title>"
         "<style>body{background:#1a1a1a;color:#e0e0e0;font-family:sans-serif;"
         "display:flex;align-items:center;justify-content:center;min-height:100vh}"
         ".b{background:#2d2d2d;border-radius:12px;padding:36px;text-align:center;max-width:400px}"
-        "h2{color:#ff8a65}p{color:#9e9e9e;margin:8px 0}</style></head>"
-        "<body><div class='b'>"
+        "h2{color:#ff8a65}p{color:#9e9e9e;margin:8px 0}"
+        ".bw{background:#1f1f1f;border-radius:6px;overflow:hidden;height:6px;margin:16px 0 8px}"
+        ".bar{height:6px;background:#ff8a65}"
+        ".cd{font-size:12px;color:#616161;margin-bottom:16px}"
+        "a{display:inline-block;background:#64B5F6;color:#000;padding:10px 22px;"
+        "border-radius:6px;text-decoration:none;font-weight:600;font-size:14px}"
+        "</style>"
+        "<script>var _t=60;"
+        "function _tick(){"
+        "var b=document.querySelector('.bar'),c=document.getElementById('_cd');"
+        "if(b)b.style.width=((_t/60)*100)+'%';"
+        "if(c)c.textContent='Returning to dashboard in '+_t+'s\u2026';"
+        "if(_t<=0){location.href='/';return;}_t--;setTimeout(_tick,1000);}"
+        "window.onload=_tick;</script>"
+        "</head><body><div class='b'>"
         "<div style='font-size:48px'>&#x1F504;</div>"
-        "<h2>Re-flashing v")
+        "<h2>Re-flashing v"))
       + String(FW_VERSION)
       + F("</h2><p>CRC mismatch detected &mdash; downloading clean binary from GitHub.</p>"
         "<p>OLED shows live progress. Device will reboot when done.</p>"
         "<p style='color:#ef9a9a;font-size:12px'>Do not power off during install.</p>"
+        "<div class='bw'><div class='bar' style='width:100%;transition:width 1s linear'></div></div>"
+        "<div class='cd' id='_cd'></div>"
+        "<a href='/'>&#8592; Back now</a>"
         "</div></body></html>");
     server.send(200, F("text/html"), h);
     delay(200);
@@ -4033,19 +4100,34 @@ void setupOTA() {
       return;
     }
     // Send the response page immediately — the actual install blocks for up to 60 s
-    String h = String(F("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Installing Update</title>"))
-      + F("<meta http-equiv='refresh' content='60;url=/'>"
+    String h = String(F("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Installing Update</title>"
         "<style>body{background:#1a1a1a;color:#e0e0e0;font-family:sans-serif;"
         "display:flex;align-items:center;justify-content:center;min-height:100vh}"
         ".b{background:#2d2d2d;border-radius:12px;padding:36px;text-align:center;max-width:400px}"
-        "h2{color:#64B5F6}p{color:#9e9e9e;margin:8px 0}</style></head>"
-        "<body><div class='b'>"
+        "h2{color:#64B5F6}p{color:#9e9e9e;margin:8px 0}"
+        ".bw{background:#1f1f1f;border-radius:6px;overflow:hidden;height:6px;margin:16px 0 8px}"
+        ".bar{height:6px;background:#64B5F6}"
+        ".cd{font-size:12px;color:#616161;margin-bottom:16px}"
+        "a{display:inline-block;background:#64B5F6;color:#000;padding:10px 22px;"
+        "border-radius:6px;text-decoration:none;font-weight:600;font-size:14px}"
+        "</style>"
+        "<script>var _t=60;"
+        "function _tick(){"
+        "var b=document.querySelector('.bar'),c=document.getElementById('_cd');"
+        "if(b)b.style.width=((_t/60)*100)+'%';"
+        "if(c)c.textContent='Returning to dashboard in '+_t+'s\u2026';"
+        "if(_t<=0){location.href='/';return;}_t--;setTimeout(_tick,1000);}"
+        "window.onload=_tick;</script>"
+        "</head><body><div class='b'>"
         "<div style='font-size:48px'>&#x1F4E5;</div>"
-        "<h2>Installing v")
+        "<h2>Installing v"))
       + otaNewVersion
       + F("</h2><p>Downloading and flashing from GitHub...</p>"
         "<p>OLED shows live progress. Device will reboot when done.</p>"
         "<p style='color:#ef9a9a;font-size:12px'>Do not power off during install.</p>"
+        "<div class='bw'><div class='bar' style='width:100%;transition:width 1s linear'></div></div>"
+        "<div class='cd' id='_cd'></div>"
+        "<a href='/'>&#8592; Back now</a>"
         "</div></body></html>");
     server.send(200, F("text/html"), h);
 
