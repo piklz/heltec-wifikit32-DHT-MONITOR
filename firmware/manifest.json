@@ -1,8 +1,8 @@
 {
-  "version": "5.42",
-  "build_date": "2026-06-22",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.40/heltec_wifkit32v2_v540_E073BBBB_firmware.ino.bin",
-  "size": 1410.7,
-  "crc32": "E073BBBB",
-  "changelog": "ux improved for timer setting &autoredirect to dash added/fixed "
+  "version": "5.43",
+  "build_date": "2026-06-23",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.43/heltec_wifkit32v2_v543_0D1EE99B_firmware.ino.bin",
+  "size": 1414.8,
+  "crc32": "0D1EE99B",
+  "changelog": "Replaced  *         with the same !isnan() && != 0.0f guard used in publishBootSummary()."
 }
