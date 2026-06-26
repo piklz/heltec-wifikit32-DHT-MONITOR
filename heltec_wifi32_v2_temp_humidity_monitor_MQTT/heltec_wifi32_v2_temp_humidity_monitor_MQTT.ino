@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.43
- * Last Updated:  2026-06-23
+ * Version:       5.44
+ * Last Updated:  2026-06-27
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -31,6 +31,28 @@
  *  • Deep sleep support for low-power operation
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.44 — 2026-06-27
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - UI:  Deep Sleep wake interval replaced with number+unit picker (Minutes /
+ *         Hours). JS packs to minutes before submit. Max 24h (1440min). Same
+ *         pattern as v5.42 publish interval. WiFiManager buffer bumped to 7.
+ *  - UI:  Platform selector replaced single <select> with 3 independent
+ *         checkboxes (Standard MQTT / Adafruit IO / Ubidots). Any combination
+ *         selectable. JS packs to comma-separated mqtt_platform string (or "all"
+ *         if all 3 checked). Server-side/NVS unchanged. Added platEnabled()
+ *         and activePlatforms() helpers; 23 OR-pair platform checks replaced.
+ *         OLED and dashboard platform display updated to use activePlatforms()
+ *         (e.g. "STD+UBI" instead of raw string).
+ *  - FIX: ntfy "Last sent" — two root causes fixed:
+ *         (a) ntfy_last_millis is a RAM var, zeroed every deep-sleep wake, so
+ *             dashboard guard was always false after boot wake. Fix: persist
+ *             last_msg, last_time, last_ok to NVS namespace "ntfy_st"; load on
+ *             boot; gate on ntfy_last_valid bool instead of millis check.
+ *         (b) Timestamp used millis()/1000 as HH:MM (uptime, not wall clock).
+ *             Fix: use getLocalTime() when ntpSynced, fallback to uptime.
+ *         Message preview now shows message body (not "title: msg") at 35 chars.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.43 — 2026-06-23
  * ─────────────────────────────────────────────────────────────────────────────
  *  - FIX: Build error — tempOk/humOk are local to readSensor() but were
@@ -38,51 +60,6 @@
  *         with the same !isnan() && != 0.0f guard used in publishBootSummary().
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.42 — 2026-06-23
- * ─────────────────────────────────────────────────────────────────────────────
- *  - UI:  Publish Interval settings input replaced with number + unit picker
- *         (Minutes / Hours / Days). JS reverse-converts stored seconds to the
- *         most natural unit on load (whole days → days, whole hours → hours,
- *         else minutes). On submit packs val×unit back to seconds into a hidden
- *         pub_timer field — server-side parse unchanged.
- *         Max extended 1h → 7 days (604800s). Min raised 30s → 60s.
- *         All 4 constrain() calls updated: boot load, settings save, WiFiManager
- *         portal field + save callback. WiFiManager buffer + setValue size bumped.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.41 — 2026-06-23
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: readSensor() — 3-attempt retry loop replacing single-attempt bail.
- *         Per-channel (tempOk/humOk): a good read is locked in and not re-read.
- *         2s delay between attempts (DHT22 min sample period). Attempt 1 almost
- *         always fails on timer wakes (Vext cut during sleep, 20ms rail delay is
- *         insufficient). Worst case 4s added awake time. On total failure falls
- *         through and publishes last-known globals rather than returning silently.
- *  - FIX: Trend calculation corrected — now compares newTemp/newHum against the
- *         prior global BEFORE committing, not after (was always computing delta=0).
- *  - FIX: ntfy messages (publishBootSummary + publishSensorData) guard against
- *         zero/NaN values — renders "--" instead of "0.0C / 0.0%" on failed reads.
- *  - UI:  actionPage() upgraded — live "Returning to dashboard in Xs..." countdown
- *         text shown beneath the shrink bar on all action/confirmation pages.
- *  - UI:  ota_install + ota_reinstall pages replaced blind meta http-equiv refresh
- *         with JS countdown bar + visible timer + "Back now" link (60s, matches
- *         max GitHub download time).
- *  - UI:  OTA manual upload success countdown extended 20s → 60s; countdown text
- *         updated to "Returning to dashboard in Xs..." for consistency.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.40 — 2026-06-22
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: rtcBootEpoch incorrectly zeroed on OTA reboots (ESP.restart()), panics,
- *         and WDT resets, causing "On:" uptime to reset mid-run (15h → 1s observed).
- *         Root cause: else branch in boot counter logic zeroed rtcBootEpoch for ALL
- *         non-sleep wakeups. Fix: only zero on ESP_RST_POWERON / ESP_RST_BROWNOUT,
- *         where RTC memory is physically wiped. Soft resets preserve RTC memory and
- *         now correctly carry the epoch forward.
- *  - FIX: getTotalUptime() cosmetic — hours/minutes could be suppressed at sub-day
- *         durations due to implicit formatter logic. Expanded to explicit uint32_t
- *         vars with clear suppression rules; "15h 3m 22s" now renders correctly.
- *
  *
  */
 
@@ -143,7 +120,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.43"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.44"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -298,6 +275,7 @@ bool   ntfy_on_publish   = false;        // every periodic publish
 String ntfy_last_msg     = "";           // last message sent (for display)
 String ntfy_last_time    = "--:--";      // HH:MM of last send
 unsigned long ntfy_last_millis = 0;
+bool   ntfy_last_valid   = false;        // true once NVS-persisted last-send exists
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POWER SAVE — pre-sleep peripheral shutdown. Each ps_* flag controls one
@@ -591,7 +569,7 @@ WiFiManagerParameter h_sleep    ("<h4 style='color:#FF7043;border-bottom:2px sol
                                  "padding-bottom:5px;margin-top:10px'>Deep Sleep</h4>");
 WiFiManagerParameter p_ds_en    ("deep_enable","Enable Deep Sleep",  "0",              2,
                                  "type='checkbox'");
-WiFiManagerParameter p_ds_min   ("deep_min",  "Wake every (min)",    "10",             5,
+WiFiManagerParameter p_ds_min   ("deep_min",  "Wake every (min)",    "10",             7,
                                  "type='number' min='1' max='1440'");
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -698,6 +676,12 @@ void loadNtfyConfig() {
   sensorHumHi     = preferences.getFloat ("h_hi",       85.0f);
   sensorHumLo     = preferences.getFloat ("h_lo",       10.0f);
   preferences.end();
+  // Load persisted last-send state (separate namespace to avoid key-count limits)
+  Preferences p; p.begin("ntfy_st", true);
+  ntfy_last_valid = p.getBool  ("last_ok",   false);
+  ntfy_last_msg   = p.getString("last_msg",  "");
+  ntfy_last_time  = p.getString("last_time", "--:--");
+  p.end();
 }
 
 // Save ntfy settings to "ntfy" namespace
@@ -740,7 +724,7 @@ void loadDeepSleepConfig() {
 
   // Sync WiFiManager parameter display values
   p_ds_en.setValue(deepSleepEnabled ? "1" : "0", 2);
-  p_ds_min.setValue(String(deepSleepMinutes).c_str(), 5);
+  p_ds_min.setValue(String(deepSleepMinutes).c_str(), 7);
   p_timer.setValue(String(publishSeconds).c_str(), 7);
 }
 
@@ -995,19 +979,52 @@ void sendNtfy(const String &title, const String &message,
 
   if (code > 0) {
     Serial.printf("[NTFY] Sent OK: %s (HTTP %d)\n", title.c_str(), code);
-    // Store last message preview (ASCII only) and timestamp
-    ntfy_last_msg = title + ": " + message;
-    if (ntfy_last_msg.length() > 30) ntfy_last_msg = ntfy_last_msg.substring(0, 30);
+    // Message preview: use the message body (not title prefix), ASCII only, 35 chars
+    String preview = message;
+    if (preview.length() > 35) preview = preview.substring(0, 35);
     String safePreview = "";
-    for (char ch : ntfy_last_msg) { if ((unsigned char)ch < 128) safePreview += ch; }
+    for (char ch : preview) { if ((unsigned char)ch > 31 && (unsigned char)ch < 128) safePreview += ch; }
     ntfy_last_msg = safePreview;
-    unsigned long t = millis() / 1000;
-    char buf[6]; snprintf(buf, sizeof(buf), "%02d:%02d", (int)(t/3600)%24, (int)(t%3600)/60);
+    // Timestamp: wall-clock HH:MM when NTP synced, else uptime HH:MM
+    char buf[6];
+    if (ntpSynced) {
+      struct tm ti; getLocalTime(&ti, 0);
+      snprintf(buf, sizeof(buf), "%02d:%02d", ti.tm_hour, ti.tm_min);
+    } else {
+      unsigned long t = millis() / 1000;
+      snprintf(buf, sizeof(buf), "%02d:%02d", (int)(t/3600)%24, (int)(t%3600)/60);
+    }
     ntfy_last_time   = String(buf);
     ntfy_last_millis = millis();
+    ntfy_last_valid  = true;
+    // Persist so it survives deep sleep — key names ≤ 15 chars
+    Preferences p; p.begin("ntfy_st", false);
+    p.putString("last_msg",  ntfy_last_msg);
+    p.putString("last_time", ntfy_last_time);
+    p.putBool  ("last_ok",   true);
+    p.end();
   } else {
     Serial.printf("[NTFY] Failed HTTP: %d\n", code);
   }
+}
+
+// Returns true if the named platform ("standard","adafruit","ubidots") should
+// publish. Supports legacy single-name values, "all", and new comma-separated
+// combos like "standard,ubidots".
+inline bool platEnabled(const char* p) {
+  if (mqtt_platform == "all") return true;
+  return mqtt_platform.indexOf(p) >= 0;
+}
+
+// Human-readable list of active platforms for OLED / dashboard display.
+// e.g. "STD+UBI" or "AIO" or "ALL"
+inline String activePlatforms() {
+  if (mqtt_platform == "all") return "ALL";
+  String out = "";
+  if (platEnabled("standard"))  out += (out.length() ? "+" : "") + String("STD");
+  if (platEnabled("adafruit"))  out += (out.length() ? "+" : "") + String("AIO");
+  if (platEnabled("ubidots"))   out += (out.length() ? "+" : "") + String("UBI");
+  return out.length() ? out : "NONE";
 }
 
 // Returns the canonical power source string used in all ntfy / MQTT outputs.
@@ -1051,7 +1068,7 @@ void publishBatteryStatus(const String &level) {
   // "level" is "low", "critical", or "ok"
   float v = batteryVoltFloat / 1000.0f;
   // Standard MQTT: dedicated /status topic + batt_status field
-  if ((mqtt_platform == "standard" || mqtt_platform == "all") && mqttStd.connected()) {
+  if (platEnabled("standard") && mqttStd.connected()) {
     mqttStd.publish((mqtt_topic + "/status").c_str(), ("battery_" + level).c_str());
     JsonDocument doc;
     doc["event"]      = "battery_" + level;
@@ -1066,14 +1083,14 @@ void publishBatteryStatus(const String &level) {
     mqttStd.loop();
   }
   // Adafruit IO: battery-status feed
-  if ((mqtt_platform == "adafruit" || mqtt_platform == "all") && mqttAIO.connected()) {
+  if (platEnabled("adafruit") && mqttAIO.connected()) {
     mqttAIO.publish((aio_username + "/feeds/battery-status").c_str(), level.c_str());
     mqttAIO.publish((aio_username + "/feeds/battery-percent").c_str(),
                     String(batteryPercentage).c_str());
     mqttAIO.loop();
   }
   // Ubidots: battery_status numeric (0=ok,1=low,2=critical) + battery_pct
-  if ((mqtt_platform == "ubidots" || mqtt_platform == "all") && mqttUBI.connected()) {
+  if (platEnabled("ubidots") && mqttUBI.connected()) {
     JsonDocument doc;
     doc["battery_status"] = (level == "critical") ? 2 : (level == "low") ? 1 : 0;
     doc["battery_pct"]    = batteryPercentage;
@@ -1471,13 +1488,12 @@ void drawFrame3(ScreenDisplay *d, DisplayUiState *s, int16_t x, int16_t y) {
   d->setFont(ArialMT_Plain_10);
   d->drawString(0 + x, 0 + y, "MQTT STATUS");
   d->drawLine(0 + x, 12 + y, 128, 12 + y);
-  String plat = mqtt_platform; plat.toUpperCase();
-  d->drawString(0 + x, 13 + y, "Mode: " + plat);
-  if (mqtt_platform == "all" || mqtt_platform == "standard")
+  d->drawString(0 + x, 13 + y, "Mode: " + activePlatforms());
+  if platEnabled("standard")
     d->drawString(0 + x, 25 + y, "Std: " + String(mqttStandardConnected ? "OK" : "X"));
-  if (mqtt_platform == "all" || mqtt_platform == "adafruit")
+  if platEnabled("adafruit")
     d->drawString(0 + x, 35 + y, "AIO: " + String(mqttAdafruitConnected ? "OK" : "X"));
-  if (mqtt_platform == "all" || mqtt_platform == "ubidots")
+  if platEnabled("ubidots")
     d->drawString(0 + x, 45 + y, "Ubi: " + String(mqttUbidotsConnected  ? "OK" : "X"));
   if (deepSleepEnabled)
     d->drawString(0 + x, 53 + y, "Sleep: " + String(deepSleepMinutes) + "min");
@@ -1833,7 +1849,7 @@ void reconnectMQTT() {
   unsigned long now = millis();
 
   // ── Standard ──────────────────────────────────────────────────────────────
-  if ((mqtt_platform == "standard" || mqtt_platform == "all") && mqtt_server.length()) {
+  if (platEnabled("standard") && mqtt_server.length()) {
     if (stdRetries >= MAX_RETRIES && now - lastStdReset > RETRY_RESET_INTERVAL)
       { stdRetries = 0; lastStdReset = now; }
     if (!mqttStandardConnected && stdRetries < MAX_RETRIES && now - lastStandardRetry > RETRY_INTERVAL) {
@@ -1850,7 +1866,7 @@ void reconnectMQTT() {
   }
 
   // ── Adafruit IO ───────────────────────────────────────────────────────────
-  if ((mqtt_platform == "adafruit" || mqtt_platform == "all") && aio_username.length() && aio_key.length()) {
+  if (platEnabled("adafruit") && aio_username.length() && aio_key.length()) {
     if (aioRetries >= MAX_RETRIES && now - lastAioReset > RETRY_RESET_INTERVAL)
       { aioRetries = 0; lastAioReset = now; }
     if (!mqttAdafruitConnected && aioRetries < MAX_RETRIES && now - lastAdafruitRetry > RETRY_INTERVAL) {
@@ -1865,7 +1881,7 @@ void reconnectMQTT() {
   }
 
   // ── Ubidots ───────────────────────────────────────────────────────────────
-  if ((mqtt_platform == "ubidots" || mqtt_platform == "all") && ubidots_token.length()) {
+  if (platEnabled("ubidots") && ubidots_token.length()) {
     if (ubiRetries >= MAX_RETRIES && now - lastUbiReset > RETRY_RESET_INTERVAL)
       { ubiRetries = 0; lastUbiReset = now; }
     if (!mqttUbidotsConnected && ubiRetries < MAX_RETRIES && now - lastUbidotsRetry > RETRY_INTERVAL) {
@@ -1892,7 +1908,7 @@ void publishSensorData() {
   JsonDocument doc;
 
   // Standard MQTT — full JSON payload including battery
-  if ((mqtt_platform == "standard" || mqtt_platform == "all") && mqttStd.connected()) {
+  if (platEnabled("standard") && mqttStd.connected()) {
     doc["device"]      = device_name;
     doc["temperature"] = temperature;
     doc["humidity"]    = humidity;
@@ -1912,7 +1928,7 @@ void publishSensorData() {
   }
 
   // Adafruit IO — temperature, humidity, battery feeds
-  if ((mqtt_platform == "adafruit" || mqtt_platform == "all") && mqttAIO.connected()) {
+  if (platEnabled("adafruit") && mqttAIO.connected()) {
     mqttAIO.publish((aio_username + "/feeds/temperature").c_str(),
                     String(temperature, 1).c_str());
     mqttAIO.publish((aio_username + "/feeds/humidity").c_str(),
@@ -1927,7 +1943,7 @@ void publishSensorData() {
   }
 
   // Ubidots — temperature, humidity, battery
-  if ((mqtt_platform == "ubidots" || mqtt_platform == "all") && mqttUBI.connected()) {
+  if (platEnabled("ubidots") && mqttUBI.connected()) {
     doc.clear();
     doc["temperature"] = temperature;
     doc["humidity"]    = humidity;
@@ -1964,7 +1980,7 @@ void publishBootSummary() {
   }
 
   // Standard MQTT -- full JSON summary
-  if ((mqtt_platform == "standard" || mqtt_platform == "all") && mqttStd.connected()) {
+  if (platEnabled("standard") && mqttStd.connected()) {
     JsonDocument doc;
     doc["event"]        = "boot";
     doc["device"]       = device_name;
@@ -1987,7 +2003,7 @@ void publishBootSummary() {
   }
 
   // Adafruit IO — battery feeds + battery-status + power-source on boot
-  if ((mqtt_platform == "adafruit" || mqtt_platform == "all") && mqttAdafruitConnected) {
+  if (platEnabled("adafruit") && mqttAdafruitConnected) {
     mqttAIO.publish((aio_username + "/feeds/battery-voltage").c_str(),  String(v, 2).c_str());
     mqttAIO.publish((aio_username + "/feeds/battery-percent").c_str(),  String(batteryPercentage).c_str());
     String bs = (batteryPercentage <= BATTERY_CRIT_PCT) ? "critical"
@@ -1998,7 +2014,7 @@ void publishBootSummary() {
   }
 
   // Ubidots -- boot context with battery_status + power_src (0=ok,1=low,2=critical)
-  if ((mqtt_platform == "ubidots" || mqtt_platform == "all") && mqttUbidotsConnected) {
+  if (platEnabled("ubidots") && mqttUbidotsConnected) {
     JsonDocument doc;
     doc["battery_v"]      = serialized(String(v, 2));
     doc["battery_pct"]    = batteryPercentage;
@@ -2170,6 +2186,8 @@ static const char COMMON_CSS[] PROGMEM =
   ".sec{background:#1f1f1f;padding:20px;border-radius:8px;margin:16px 0;border:1px solid #424242}"
   ".sec h2{color:#9e9e9e;font-size:16px;margin-bottom:16px;border-bottom:1px solid #424242;padding-bottom:8px}"
   ".info{background:#1a237e;padding:12px;border-radius:6px;margin:12px 0;font-size:12px;color:#90caf9;border:1px solid #283593}"
+  ".cb{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;color:#e0e0e0;font-size:14px}"
+  ".cb input{width:16px;height:16px;cursor:pointer}"
   ".cb{display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0}.cb input{width:auto}"
   ".back{background:#757575;color:#fff !important}.back:hover{background:#616161}";
 // Return standard head string for buffered page sends
@@ -2689,7 +2707,7 @@ void checkOtaManifest(bool force) {
     }
 
     // ── MQTT update notification ──────────────────────────────────────────────
-    if ((mqtt_platform == "standard" || mqtt_platform == "all") && mqttStd.connected()) {
+    if (platEnabled("standard") && mqttStd.connected()) {
       JsonDocument nd;
       nd["event"]      = "ota_available";
       nd["device"]     = device_name;
@@ -3169,20 +3187,19 @@ void setupOTA() {
 
     // MQTT
     h += F("<div class='card'><h2>MQTT</h2><p><strong>Platform:</strong> ");
-    String plat=mqtt_platform; plat.toUpperCase();
-    h += plat;
+    h += activePlatforms();
     h += F("</p>");
-    if(mqtt_platform=="all"||mqtt_platform=="standard"){
+    if(platEnabled("standard")){
       h += F("<p><span class='dot ");
       h += mqttStandardConnected?F("on"):F("off");
       h += F("'></span>Standard</p>");
     }
-    if(mqtt_platform=="all"||mqtt_platform=="adafruit"){
+    if(platEnabled("adafruit")){
       h += F("<p><span class='dot ");
       h += mqttAdafruitConnected?F("on"):F("off");
       h += F("'></span>Adafruit IO</p>");
     }
-    if(mqtt_platform=="all"||mqtt_platform=="ubidots"){
+    if(platEnabled("ubidots")){
       h += F("<p><span class='dot ");
       h += mqttUbidotsConnected?F("on"):F("off");
       h += F("'></span>Ubidots</p>");
@@ -3231,10 +3248,14 @@ void setupOTA() {
       if(ntfy_on_publish)flags+="Publish ";
       if(!flags.length())flags="None";
       h += flags;
-      if(ntfy_last_millis>0){
-        String sm=""; for(char ch:ntfy_last_msg){if((unsigned char)ch<128)sm+=ch;}
-        h += F("</p><p><strong>Last sent:</strong> ");
-        h += ntfy_last_time+" - "+sm;
+      h += F("</p><p><strong>Last sent:</strong> ");
+      if(ntfy_last_valid && ntfy_last_msg.length()){
+        String sm=""; for(char ch:ntfy_last_msg){if((unsigned char)ch>31&&(unsigned char)ch<128)sm+=ch;}
+        h += ntfy_last_time;
+        h += F(" &mdash; ");
+        h += sm;
+      } else {
+        h += F("&mdash;");
       }
     }
     h += F("</p></div>");
@@ -3562,19 +3583,30 @@ void setupOTA() {
       "<label>Name</label><input name='device_name' value='");
     h += device_name;
     h += F("' required>"
-      "<label>Platform</label><select name='mqtt_platform'>");
-    const char* plats[]={"standard","adafruit","ubidots","all"};
-    const char* platL[]={"Standard","Adafruit IO","Ubidots","ALL"};
-    for(int i=0;i<4;i++){
-      h += F("<option value='");
-      h += plats[i];
-      h += F("'");
-      if(mqtt_platform==plats[i])h += F(" selected");
-      h += F(">");
-      h += platL[i];
-      h += F("</option>");
-    }
-    h += F("</select></div>"
+      "<label>Platform</label>"
+      "<div class='info' style='margin-bottom:8px'>Select one or more publish targets.</div>"
+      "<label class='cb'><input type='checkbox' id='plat_std' value='standard'> Standard MQTT</label>"
+      "<label class='cb'><input type='checkbox' id='plat_aio' value='adafruit'> Adafruit IO</label>"
+      "<label class='cb'><input type='checkbox' id='plat_ubi' value='ubidots'> Ubidots</label>"
+      "<input type='hidden' name='mqtt_platform' id='mqtt_platform'>"
+      "<script>(function(){"
+      "var cur='");
+    h += mqtt_platform;
+    h += F("';"
+      "var all=(cur==='all');"
+      "document.getElementById('plat_std').checked=all||cur.indexOf('standard')>=0;"
+      "document.getElementById('plat_aio').checked=all||cur.indexOf('adafruit')>=0;"
+      "document.getElementById('plat_ubi').checked=all||cur.indexOf('ubidots')>=0;"
+      "var fm=document.querySelector('form');"
+      "if(fm)fm.addEventListener('submit',function(){"
+      "var parts=[];"
+      "if(document.getElementById('plat_std').checked)parts.push('standard');"
+      "if(document.getElementById('plat_aio').checked)parts.push('adafruit');"
+      "if(document.getElementById('plat_ubi').checked)parts.push('ubidots');"
+      "var v=parts.length===3?'all':parts.join(',');"
+      "document.getElementById('mqtt_platform').value=v||'standard';"
+      "});})();"
+      "</script></div>"
       "<div class='sec'><h2>Publish Interval</h2>"
       "<label>Publish every</label>"
       "<div style='display:flex;gap:8px;align-items:center'>"
@@ -3636,10 +3668,30 @@ void setupOTA() {
       "<input type='checkbox' name='deep_enable' style='width:auto'");
     if(deepSleepEnabled)h += F(" checked");
     h += F("> Enable Deep Sleep</label>"
-      "<label>Wake interval (minutes)</label>"
-      "<input type='number' name='deep_min' value='");
+      "<label>Wake interval</label>"
+      "<div style='display:flex;gap:8px;align-items:center'>"
+      "<input type='number' id='ds_val' name='ds_val' min='1' max='999' style='width:90px' value='1'>"
+      "<select id='ds_unit' name='ds_unit' style='width:auto'>"
+      "<option value='1'>Minutes</option>"
+      "<option value='60'>Hours</option>"
+      "</select></div>"
+      "<div class='info' style='margin-top:8px'>Min 1 minute &mdash; max 24 hours.</div>"
+      "<input type='hidden' name='deep_min' id='deep_min'>"
+      "<script>(function(){"
+      "var m=");
     h += String(deepSleepMinutes);
-    h += F("' min='1' max='1440'>"
+    h += F(";"
+      "var uv,un;"
+      "if(m%60===0&&m>=60){uv=m/60;un=60;}"
+      "else{uv=m;un=1;}"
+      "document.getElementById('ds_val').value=uv;"
+      "document.getElementById('ds_unit').value=un;"
+      "var fm=document.querySelector('form');"
+      "if(fm)fm.addEventListener('submit',function(){"
+      "var v=parseInt(document.getElementById('ds_val').value)||1;"
+      "var u=parseInt(document.getElementById('ds_unit').value)||1;"
+      "document.getElementById('deep_min').value=Math.max(1,Math.min(1440,v*u));"
+      "});})();</script>"
       "<div style='margin-top:16px;border-top:1px solid #424242;padding-top:12px'>"
       "<div style='font-weight:600;color:#9e9e9e;font-size:13px;text-transform:uppercase;"
       "letter-spacing:1px;margin-bottom:8px'>Wake Display Mode</div>"
@@ -4556,17 +4608,17 @@ void setup() {
     while (millis() - waitStart < 10000 && !connected) {
       esp_task_wdt_reset();
       // Try each configured platform directly (bypasses retry-interval guard)
-      if ((mqtt_platform == "standard" || mqtt_platform == "all") && mqtt_server.length() && !mqttStd.connected()) {
+      if (platEnabled("standard") && mqtt_server.length() && !mqttStd.connected()) {
         String id = device_name + "-std-" + String(random(0xffff), HEX);
         connectMQTT(mqttStd, mqtt_server, mqtt_port.toInt(), mqtt_user, mqtt_pass, id);
         if (mqttStd.connected()) { mqttStandardConnected = true; stdRetries = 0; }
       }
-      if ((mqtt_platform == "adafruit" || mqtt_platform == "all") && aio_username.length() && !mqttAIO.connected()) {
+      if (platEnabled("adafruit") && aio_username.length() && !mqttAIO.connected()) {
         String id = device_name + "-aio-" + String(random(0xffff), HEX);
         connectMQTT(mqttAIO, "io.adafruit.com", 1883, aio_username, aio_key, id);
         if (mqttAIO.connected()) { mqttAdafruitConnected = true; aioRetries = 0; }
       }
-      if ((mqtt_platform == "ubidots" || mqtt_platform == "all") && ubidots_token.length() && !mqttUBI.connected()) {
+      if (platEnabled("ubidots") && ubidots_token.length() && !mqttUBI.connected()) {
         String id = device_name + "-ubi-" + String(random(0xffff), HEX);
         connectMQTT(mqttUBI, "industrial.api.ubidots.com", 1883, ubidots_token, "", id);
         if (mqttUBI.connected()) { mqttUbidotsConnected = true; ubiRetries = 0; }
@@ -4666,7 +4718,7 @@ void setup() {
       showOtaBootSplash(prevVer);
 
       // MQTT: publish update-applied event
-      if ((mqtt_platform == "standard" || mqtt_platform == "all") && mqttStd.connected()) {
+      if (platEnabled("standard") && mqttStd.connected()) {
         JsonDocument ud;
         ud["event"]     = "ota_applied";
         ud["device"]    = device_name;
