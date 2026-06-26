@@ -1,8 +1,8 @@
 {
   "version": "5.45",
-  "build_date": "2026-06-22",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.40/heltec_wifkit32v2_v540_E073BBBB_firmware.ino.bin",
-  "size": 1410.7,
-  "crc32": "E073BBBB",
+  "build_date": "2026-06-26",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.45/heltec_wifkit32v2_v545_5F3D95D5_firmware.ino.bin",
+  "size": 1417.2,
+  "crc32": "5F3D95D5",
   "changelog": "regexe fix,v5.44-Deep sleep picker:,Platform multi-selec ,ntfy Last sent: Both root causes fixed.  -survives deep sleep. "
 }
