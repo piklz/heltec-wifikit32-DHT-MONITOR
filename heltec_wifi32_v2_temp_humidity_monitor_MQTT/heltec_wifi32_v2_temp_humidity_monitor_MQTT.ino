@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.44
+ * Version:       5.45
  * Last Updated:  2026-06-27
  * License:       MIT
  *
@@ -29,6 +29,13 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.45 — 2026-06-27
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Build error — bulk replace in v5.44 dropped outer parentheses from
+ *         3 `if` statements in drawFrame3(), producing `if platEnabled(...)`.
+ *         Corrected to `if (platEnabled(...))`.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.44 — 2026-06-27
@@ -52,14 +59,7 @@
  *             Fix: use getLocalTime() when ntpSynced, fallback to uptime.
  *         Message preview now shows message body (not "title: msg") at 35 chars.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.43 — 2026-06-23
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: Build error — tempOk/humOk are local to readSensor() but were
- *         referenced in publishSensorData() (a separate function). Replaced
- *         with the same !isnan() && != 0.0f guard used in publishBootSummary().
  *
- * ─────────────────────────────────────────────────────────────────────────────
  *
  */
 
@@ -120,7 +120,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.44"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.45"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1489,11 +1489,11 @@ void drawFrame3(ScreenDisplay *d, DisplayUiState *s, int16_t x, int16_t y) {
   d->drawString(0 + x, 0 + y, "MQTT STATUS");
   d->drawLine(0 + x, 12 + y, 128, 12 + y);
   d->drawString(0 + x, 13 + y, "Mode: " + activePlatforms());
-  if platEnabled("standard")
+  if (platEnabled("standard"))
     d->drawString(0 + x, 25 + y, "Std: " + String(mqttStandardConnected ? "OK" : "X"));
-  if platEnabled("adafruit")
+  if (platEnabled("adafruit"))
     d->drawString(0 + x, 35 + y, "AIO: " + String(mqttAdafruitConnected ? "OK" : "X"));
-  if platEnabled("ubidots")
+  if (platEnabled("ubidots"))
     d->drawString(0 + x, 45 + y, "Ubi: " + String(mqttUbidotsConnected  ? "OK" : "X"));
   if (deepSleepEnabled)
     d->drawString(0 + x, 53 + y, "Sleep: " + String(deepSleepMinutes) + "min");
