@@ -1,8 +1,8 @@
 {
   "version": "5.46",
-  "build_date": "2026-06-22",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.40/heltec_wifkit32v2_v540_E073BBBB_firmware.ino.bin",
-  "size": 1410.7,
-  "crc32": "E073BBBB",
+  "build_date": "2026-06-27",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.46/heltec_wifkit32v2_v546_8840FEA3_firmware.ino.bin",
+  "size": 1417.1,
+  "crc32": "8840FEA3",
   "changelog": " Duplicate .cb CSS rule removed "
 }
