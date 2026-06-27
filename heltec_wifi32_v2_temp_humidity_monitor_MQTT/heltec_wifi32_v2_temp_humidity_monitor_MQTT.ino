@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.45
+ * Version:       5.46
  * Last Updated:  2026-06-27
  * License:       MIT
  *
@@ -29,6 +29,13 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.46 — 2026-06-27
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Duplicate .cb CSS rule removed (introduced across two separate
+ *         sessions both adding the checkbox label style). Single clean
+ *         definition kept with explicit 16x16 input sizing.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.45 — 2026-06-27
@@ -59,6 +66,58 @@
  *             Fix: use getLocalTime() when ntpSynced, fallback to uptime.
  *         Message preview now shows message body (not "title: msg") at 35 chars.
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.43 — 2026-06-23
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Build error — tempOk/humOk are local to readSensor() but were
+ *         referenced in publishSensorData() (a separate function). Replaced
+ *         with the same !isnan() && != 0.0f guard used in publishBootSummary().
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.42 — 2026-06-23
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - UI:  Publish Interval settings input replaced with number + unit picker
+ *         (Minutes / Hours / Days). JS reverse-converts stored seconds to the
+ *         most natural unit on load (whole days → days, whole hours → hours,
+ *         else minutes). On submit packs val×unit back to seconds into a hidden
+ *         pub_timer field — server-side parse unchanged.
+ *         Max extended 1h → 7 days (604800s). Min raised 30s → 60s.
+ *         All 4 constrain() calls updated: boot load, settings save, WiFiManager
+ *         portal field + save callback. WiFiManager buffer + setValue size bumped.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.41 — 2026-06-23
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: readSensor() — 3-attempt retry loop replacing single-attempt bail.
+ *         Per-channel (tempOk/humOk): a good read is locked in and not re-read.
+ *         2s delay between attempts (DHT22 min sample period). Attempt 1 almost
+ *         always fails on timer wakes (Vext cut during sleep, 20ms rail delay is
+ *         insufficient). Worst case 4s added awake time. On total failure falls
+ *         through and publishes last-known globals rather than returning silently.
+ *  - FIX: Trend calculation corrected — now compares newTemp/newHum against the
+ *         prior global BEFORE committing, not after (was always computing delta=0).
+ *  - FIX: ntfy messages (publishBootSummary + publishSensorData) guard against
+ *         zero/NaN values — renders "--" instead of "0.0C / 0.0%" on failed reads.
+ *  - UI:  actionPage() upgraded — live "Returning to dashboard in Xs..." countdown
+ *         text shown beneath the shrink bar on all action/confirmation pages.
+ *  - UI:  ota_install + ota_reinstall pages replaced blind meta http-equiv refresh
+ *         with JS countdown bar + visible timer + "Back now" link (60s, matches
+ *         max GitHub download time).
+ *  - UI:  OTA manual upload success countdown extended 20s → 60s; countdown text
+ *         updated to "Returning to dashboard in Xs..." for consistency.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.40 — 2026-06-22
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: rtcBootEpoch incorrectly zeroed on OTA reboots (ESP.restart()), panics,
+ *         and WDT resets, causing "On:" uptime to reset mid-run (15h → 1s observed).
+ *         Root cause: else branch in boot counter logic zeroed rtcBootEpoch for ALL
+ *         non-sleep wakeups. Fix: only zero on ESP_RST_POWERON / ESP_RST_BROWNOUT,
+ *         where RTC memory is physically wiped. Soft resets preserve RTC memory and
+ *         now correctly carry the epoch forward.
+ *  - FIX: getTotalUptime() cosmetic — hours/minutes could be suppressed at sub-day
+ *         durations due to implicit formatter logic. Expanded to explicit uint32_t
+ *         vars with clear suppression rules; "15h 3m 22s" now renders correctly.
  *
  *
  */
@@ -120,7 +179,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.45"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.46"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -2188,7 +2247,6 @@ static const char COMMON_CSS[] PROGMEM =
   ".info{background:#1a237e;padding:12px;border-radius:6px;margin:12px 0;font-size:12px;color:#90caf9;border:1px solid #283593}"
   ".cb{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;color:#e0e0e0;font-size:14px}"
   ".cb input{width:16px;height:16px;cursor:pointer}"
-  ".cb{display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0}.cb input{width:auto}"
   ".back{background:#757575;color:#fff !important}.back:hover{background:#616161}";
 // Return standard head string for buffered page sends
 static String pageHead(const String& title) {
