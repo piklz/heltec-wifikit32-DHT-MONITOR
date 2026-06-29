@@ -1,8 +1,8 @@
 {
-  "version": "5.47",
+  "version": "5.48",
   "build_date": "2026-06-29",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.47/heltec_wifkit32v2_v547_63146D90_firmware.ino.bin",
   "size": 1417.4,
   "crc32": "63146D90",
-  "changelog": "garbage uptime:fixed Button + stealth = dead screen fixed"
+  "changelog": "device name dupes ntfy outputs fixed cleaned"
 }

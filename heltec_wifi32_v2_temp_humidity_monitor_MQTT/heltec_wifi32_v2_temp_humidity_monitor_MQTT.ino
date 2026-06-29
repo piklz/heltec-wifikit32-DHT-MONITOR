@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.47
+ * Version:       5.48
  * Last Updated:  2026-06-29
  * License:       MIT
  *
@@ -29,6 +29,15 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.48 — 2026-06-29
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - UI:  Removed duplicate device_name from ntfy message bodies. Title already
+ *         carries "Event: device_name" — the first body line repeating it was
+ *         redundant. Fixed in 7 sends: boot/wake summary, sensor publish, sleep,
+ *         temp high/low, humidity high/low. Battery critical/low and OTA update
+ *         notifications left unchanged (their titles don't include device_name).
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.47 — 2026-06-29
@@ -47,13 +56,6 @@
  *         are registered; displayOn() alone is sufficient to restore display.
  *         Fix: attachClick() and attachDoubleClick() now check stealthThisWake,
  *         call display.displayOn() + led.Breathe() + clear stealthThisWake.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.46 — 2026-06-27
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: Duplicate .cb CSS rule removed (introduced across two separate
- *         sessions both adding the checkbox label style). Single clean
- *         definition kept with explicit 16x16 input sizing.
  *
  *
  *
@@ -116,7 +118,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.47"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.48"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1180,8 +1182,7 @@ void checkSensorAlerts() {
   // ── TEMPERATURE HIGH ─────────────────────────────────────────────────
   if (!tempHiSent && temperature >= sensorTempHi) {
     tempHiSent = true;
-    String msg = device_name + "\n"
-      "Temperature HIGH: " + String(temperature,1) + "°C\n"
+    String msg = "Temperature HIGH: " + String(temperature,1) + "°C\n"
       "Threshold: " + String(sensorTempHi,1) + "°C\n"
       "Humidity: " + String(humidity,1) + "%";
     sendNtfy("🌡️ Temp High: " + device_name, msg, 4, "thermometer,warning");
@@ -1193,8 +1194,7 @@ void checkSensorAlerts() {
   // ── TEMPERATURE LOW ──────────────────────────────────────────────────
   if (!tempLoSent && temperature <= sensorTempLo) {
     tempLoSent = true;
-    String msg = device_name + "\n"
-      "Temperature LOW: " + String(temperature,1) + "°C\n"
+    String msg = "Temperature LOW: " + String(temperature,1) + "°C\n"
       "Threshold: " + String(sensorTempLo,1) + "°C\n"
       "Humidity: " + String(humidity,1) + "%";
     sendNtfy("🌡️ Temp Low: " + device_name, msg, 4, "thermometer,snowflake");
@@ -1206,8 +1206,7 @@ void checkSensorAlerts() {
   // ── HUMIDITY HIGH ─────────────────────────────────────────────────────
   if (!humHiSent && humidity >= sensorHumHi) {
     humHiSent = true;
-    String msg = device_name + "\n"
-      "Humidity HIGH: " + String(humidity,1) + "%\n"
+    String msg = "Humidity HIGH: " + String(humidity,1) + "%\n"
       "Threshold: " + String(sensorHumHi,1) + "%\n"
       "Temp: " + String(temperature,1) + "°C";
     sendNtfy("💧 Humidity High: " + device_name, msg, 3, "droplet,warning");
@@ -1219,8 +1218,7 @@ void checkSensorAlerts() {
   // ── HUMIDITY LOW ──────────────────────────────────────────────────────
   if (!humLoSent && humidity <= sensorHumLo) {
     humLoSent = true;
-    String msg = device_name + "\n"
-      "Humidity LOW: " + String(humidity,1) + "%\n"
+    String msg = "Humidity LOW: " + String(humidity,1) + "%\n"
       "Threshold: " + String(sensorHumLo,1) + "%\n"
       "Temp: " + String(temperature,1) + "°C";
     sendNtfy("💧 Humidity Low: " + device_name, msg, 3, "droplet,desert_island");
@@ -1262,8 +1260,7 @@ void powerDownPeripherals() {
   // ntfy sleep notification -- gated on ntfy_on_sleep (default OFF)
   if (ntfy_enabled && ntfy_on_sleep && ntfy_topic.length()) {
     float v = batteryVoltFloat / 1000.0f;
-    String msg = device_name + "\n"
-                 "Sleeping for " + String(deepSleepMinutes) + " min\n"
+    String msg = "Sleeping for " + String(deepSleepMinutes) + " min\n"
                  "Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr();
     int est = estSleepsRemaining();
     if (est >= 0) msg += "\n~" + String(est) + " sleeps remaining";
@@ -1968,8 +1965,7 @@ void publishSensorData() {
     float battV2 = batteryVoltFloat / 1000.0f;
     String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "C" : "--";
     String hStr = (!isnan(humidity)    && humidity    != 0.0f) ? String(humidity,    1) + "%" : "--";
-    String msg = device_name + "\n"
-                 "Temp: " + tStr + "  Hum: " + hStr + "\n"
+    String msg = "Temp: " + tStr + "  Hum: " + hStr + "\n"
                  "Batt: " + String(battV2, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr();
     sendNtfy("Sensor: " + device_name, msg, 2, "thermometer");
   }
@@ -2054,8 +2050,7 @@ void publishBootSummary() {
 
     String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "C" : "--";
     String hStr = (!isnan(humidity)    && humidity    != 0.0f) ? String(humidity,    1) + "%" : "--";
-    String msg = device_name + "\n"
-                 "Temp: " + tStr + "  Hum: " + hStr + "\n"
+    String msg = "Temp: " + tStr + "  Hum: " + hStr + "\n"
                  "Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
                  "Wake: " + reason + "  Mode: " + modeStr + "  Boot#" + String(bootCount) + "\n"
                  "On: " + getTotalUptime() + "\n"
