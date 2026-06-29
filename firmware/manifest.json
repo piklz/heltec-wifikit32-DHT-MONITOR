@@ -1,8 +1,8 @@
 {
   "version": "5.47",
-  "build_date": "2026-06-22",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.40/heltec_wifkit32v2_v540_E073BBBB_firmware.ino.bin",
-  "size": 1410.7,
-  "crc32": "E073BBBB",
+  "build_date": "2026-06-29",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.47/heltec_wifkit32v2_v547_63146D90_firmware.ino.bin",
+  "size": 1417.4,
+  "crc32": "63146D90",
   "changelog": "garbage uptime:fixed Button + stealth = dead screen fixed"
 }
