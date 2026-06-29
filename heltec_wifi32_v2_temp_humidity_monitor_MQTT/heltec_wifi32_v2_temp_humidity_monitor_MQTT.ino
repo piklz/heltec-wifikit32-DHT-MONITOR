@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.46
- * Last Updated:  2026-06-27
+ * Version:       5.47
+ * Last Updated:  2026-06-29
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -31,93 +31,30 @@
  *  • Deep sleep support for low-power operation
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.47 — 2026-06-29
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: getTotalUptime() uint32_t underflow producing "49710d" garbage.
+ *         Root cause: fast crystal accumulates ~2min drift per 120min sleep;
+ *         first NTP packet snaps time to correct value, second correction packet
+ *         can step it back slightly below rtcBootEpoch. uint32_t subtraction
+ *         wraps to ~UINT32_MAX (4,294,967,175s ≈ 49710 days).
+ *         Fix: int64_t arithmetic for the delta; if delta < 0 re-latch
+ *         rtcBootEpoch to time(nullptr) and return "syncing..." that cycle.
+ *  - FIX: Button press during stealth timer wake left OLED dark and LED off.
+ *         Root cause: attachClick() only set disableDeepSleepUntil — never
+ *         called display.displayOn() or cleared stealthThisWake. ui.init()
+ *         was already called in setup() (then displayOff()), so all UI frames
+ *         are registered; displayOn() alone is sufficient to restore display.
+ *         Fix: attachClick() and attachDoubleClick() now check stealthThisWake,
+ *         call display.displayOn() + led.Breathe() + clear stealthThisWake.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.46 — 2026-06-27
  * ─────────────────────────────────────────────────────────────────────────────
  *  - FIX: Duplicate .cb CSS rule removed (introduced across two separate
  *         sessions both adding the checkbox label style). Single clean
  *         definition kept with explicit 16x16 input sizing.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.45 — 2026-06-27
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: Build error — bulk replace in v5.44 dropped outer parentheses from
- *         3 `if` statements in drawFrame3(), producing `if platEnabled(...)`.
- *         Corrected to `if (platEnabled(...))`.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.44 — 2026-06-27
- * ─────────────────────────────────────────────────────────────────────────────
- *  - UI:  Deep Sleep wake interval replaced with number+unit picker (Minutes /
- *         Hours). JS packs to minutes before submit. Max 24h (1440min). Same
- *         pattern as v5.42 publish interval. WiFiManager buffer bumped to 7.
- *  - UI:  Platform selector replaced single <select> with 3 independent
- *         checkboxes (Standard MQTT / Adafruit IO / Ubidots). Any combination
- *         selectable. JS packs to comma-separated mqtt_platform string (or "all"
- *         if all 3 checked). Server-side/NVS unchanged. Added platEnabled()
- *         and activePlatforms() helpers; 23 OR-pair platform checks replaced.
- *         OLED and dashboard platform display updated to use activePlatforms()
- *         (e.g. "STD+UBI" instead of raw string).
- *  - FIX: ntfy "Last sent" — two root causes fixed:
- *         (a) ntfy_last_millis is a RAM var, zeroed every deep-sleep wake, so
- *             dashboard guard was always false after boot wake. Fix: persist
- *             last_msg, last_time, last_ok to NVS namespace "ntfy_st"; load on
- *             boot; gate on ntfy_last_valid bool instead of millis check.
- *         (b) Timestamp used millis()/1000 as HH:MM (uptime, not wall clock).
- *             Fix: use getLocalTime() when ntpSynced, fallback to uptime.
- *         Message preview now shows message body (not "title: msg") at 35 chars.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.43 — 2026-06-23
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: Build error — tempOk/humOk are local to readSensor() but were
- *         referenced in publishSensorData() (a separate function). Replaced
- *         with the same !isnan() && != 0.0f guard used in publishBootSummary().
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.42 — 2026-06-23
- * ─────────────────────────────────────────────────────────────────────────────
- *  - UI:  Publish Interval settings input replaced with number + unit picker
- *         (Minutes / Hours / Days). JS reverse-converts stored seconds to the
- *         most natural unit on load (whole days → days, whole hours → hours,
- *         else minutes). On submit packs val×unit back to seconds into a hidden
- *         pub_timer field — server-side parse unchanged.
- *         Max extended 1h → 7 days (604800s). Min raised 30s → 60s.
- *         All 4 constrain() calls updated: boot load, settings save, WiFiManager
- *         portal field + save callback. WiFiManager buffer + setValue size bumped.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.41 — 2026-06-23
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: readSensor() — 3-attempt retry loop replacing single-attempt bail.
- *         Per-channel (tempOk/humOk): a good read is locked in and not re-read.
- *         2s delay between attempts (DHT22 min sample period). Attempt 1 almost
- *         always fails on timer wakes (Vext cut during sleep, 20ms rail delay is
- *         insufficient). Worst case 4s added awake time. On total failure falls
- *         through and publishes last-known globals rather than returning silently.
- *  - FIX: Trend calculation corrected — now compares newTemp/newHum against the
- *         prior global BEFORE committing, not after (was always computing delta=0).
- *  - FIX: ntfy messages (publishBootSummary + publishSensorData) guard against
- *         zero/NaN values — renders "--" instead of "0.0C / 0.0%" on failed reads.
- *  - UI:  actionPage() upgraded — live "Returning to dashboard in Xs..." countdown
- *         text shown beneath the shrink bar on all action/confirmation pages.
- *  - UI:  ota_install + ota_reinstall pages replaced blind meta http-equiv refresh
- *         with JS countdown bar + visible timer + "Back now" link (60s, matches
- *         max GitHub download time).
- *  - UI:  OTA manual upload success countdown extended 20s → 60s; countdown text
- *         updated to "Returning to dashboard in Xs..." for consistency.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.40 — 2026-06-22
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: rtcBootEpoch incorrectly zeroed on OTA reboots (ESP.restart()), panics,
- *         and WDT resets, causing "On:" uptime to reset mid-run (15h → 1s observed).
- *         Root cause: else branch in boot counter logic zeroed rtcBootEpoch for ALL
- *         non-sleep wakeups. Fix: only zero on ESP_RST_POWERON / ESP_RST_BROWNOUT,
- *         where RTC memory is physically wiped. Soft resets preserve RTC memory and
- *         now correctly carry the epoch forward.
- *  - FIX: getTotalUptime() cosmetic — hours/minutes could be suppressed at sub-day
- *         durations due to implicit formatter logic. Expanded to explicit uint32_t
- *         vars with clear suppression rules; "15h 3m 22s" now renders correctly.
  *
  *
  */
@@ -179,7 +116,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.46"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.47"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -663,14 +600,24 @@ void markBootEpoch() {
 // unit is present. Examples: "15h 3m 22s", "2d 0h 5m 10s", "4m 8s", "45s".
 String getTotalUptime() {
   if (!ntpSynced || rtcBootEpoch == 0) return "syncing...";
-  uint32_t t = (uint32_t)time(nullptr) - rtcBootEpoch;
+  int64_t delta = (int64_t)time(nullptr) - (int64_t)rtcBootEpoch;
+  if (delta < 0) {
+    // NTP stepped time backward after epoch was latched (fast crystal accumulated
+    // drift; second NTP correction packet snapped time back). Re-latch so future
+    // calls are correct; return syncing... this cycle.
+    rtcBootEpoch = (uint32_t)time(nullptr);
+    Serial.printf("[UPTIME] NTP backward step detected — re-latching epoch to %u\n",
+                  rtcBootEpoch);
+    return "syncing...";
+  }
+  uint32_t t = (uint32_t)delta;
   uint32_t d = t / 86400;
   uint32_t h = (t % 86400) / 3600;
   uint32_t m = (t % 3600) / 60;
   uint32_t s = t % 60;
   String u = "";
-  if (d)      { u += String(d) + "d "; }
-  if (h || d) { u += String(h) + "h "; }   // always show h once days appear
+  if (d)           { u += String(d) + "d "; }
+  if (h || d)      { u += String(h) + "h "; }
   if (m || h || d) { u += String(m) + "m "; }
   u += String(s) + "s";
   return u;
@@ -4563,13 +4510,26 @@ void setup() {
   button.attachClick([]() {
     disableDeepSleepUntil = millis() + 10UL * 60UL * 1000UL;
     Serial.println(F("[BTN] Click -- awake 10 min"));
+    // In stealth mode the display was turned off after ui.init() — ui frames are
+    // already registered so displayOn() is all that's needed to bring it back.
+    if (stealthThisWake) {
+      stealthThisWake = false;
+      display.displayOn();
+      led.Breathe(2000).Forever().Update();
+      Serial.println(F("[BTN] Stealth override -- display + LED activated"));
+    }
   });
 
   // Double-click: immediate sensor read + publish on demand
   button.attachDoubleClick([]() {
     Serial.println(F("[BTN] Double-click -- manual read+publish"));
-    disableDeepSleepUntil = millis() + 10UL * 60UL * 1000UL;  // stay awake
-    // Show a brief "Reading..." overlay on current frame
+    disableDeepSleepUntil = millis() + 10UL * 60UL * 1000UL;
+    if (stealthThisWake) {
+      stealthThisWake = false;
+      display.displayOn();
+      led.Breathe(2000).Forever().Update();
+      Serial.println(F("[BTN] Stealth override -- display + LED activated"));
+    }
     display.clear();
     display.setTextAlignment(TEXT_ALIGN_CENTER);
     display.setFont(ArialMT_Plain_16);
@@ -4577,8 +4537,8 @@ void setup() {
     display.setFont(ArialMT_Plain_10);
     display.drawString(64, 34, "Manual trigger");
     display.display();
-    delay(400);  // brief visual feedback
-    readSensor();  // reads DHT + publishes + updates history
+    delay(400);
+    readSensor();
     Serial.println(F("[BTN] Manual read complete"));
   });
 
