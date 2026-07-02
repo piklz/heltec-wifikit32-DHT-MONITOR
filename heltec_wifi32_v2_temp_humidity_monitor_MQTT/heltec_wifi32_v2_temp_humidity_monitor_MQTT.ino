@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.49
+ * Version:       5.50
  * Last Updated:  2026-07-02
  * License:       MIT
  *
@@ -29,6 +29,20 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.50 — 2026-07-02
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - UI:  ntfy connection config (enable, what-to-send toggles, server, topic,
+ *         token) merged into the tabbed card as a 4th tab, alongside Standard/
+ *         Adafruit/Ubidots. Card renamed "MQTT Platforms" → "Publish Targets"
+ *         to accurately reflect that ntfy is HTTP-based, not MQTT protocol —
+ *         grouped by function (all are publish/notify destinations) not by
+ *         transport. ntfy tab dot synced live to the Enable ntfy checkbox
+ *         (added id='ntfy_enabled' alongside existing name attr — save handler
+ *         unaffected, still reads by name). Sensor Alerts (threshold config)
+ *         stays a standalone section below the card — it's alerting rules, not
+ *         a publish target itself.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.49 — 2026-07-02
@@ -131,7 +145,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.49"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.50"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -3665,7 +3679,7 @@ void setupOTA() {
       "});})();</script></div>"
       "<div class='mcard open' id='mqttCard'>"
       "<div class='mhead' onclick=\"this.parentElement.classList.toggle('open')\">"
-      "<h2>MQTT Platforms</h2><span class='mchev'>&#9656;</span></div>"
+      "<h2>Publish Targets</h2><span class='mchev'>&#9656;</span></div>"
       "<div class='mbody'>"
       "<div class='mtabs'>"
       "<div class='mtab active' data-tab='std' onclick=\"mqttTab('std')\">"
@@ -3674,6 +3688,8 @@ void setupOTA() {
       "<span class='mdot' id='dot_aio'></span>Adafruit IO</div>"
       "<div class='mtab' data-tab='ubi' onclick=\"mqttTab('ubi')\">"
       "<span class='mdot' id='dot_ubi'></span>Ubidots</div>"
+      "<div class='mtab' data-tab='ntfy' onclick=\"mqttTab('ntfy')\">"
+      "<span class='mdot' id='dot_ntfy'></span>ntfy</div>"
       "</div>"
       "<div class='mpanel active' id='panel_std'>"
       "<div class='info'>Local broker e.g. Mosquitto</div>"
@@ -3701,6 +3717,42 @@ void setupOTA() {
     h += F("'><label>Device Label</label><input name='ubi_device' value='");
     h += ubidots_device;
     h += F("'></div>"
+      "<div class='mpanel' id='panel_ntfy'>"
+      "<div class='info'>Push alerts via <a href='https://ntfy.sh' target='_blank' "
+      "style='color:#64B5F6'>ntfy.sh</a> or self-hosted.<br>"
+      "Battery alerts fire independently &mdash; they don't require "
+      "the publish setting to be on.</div>"
+      "<label class='cb'><input type='checkbox' id='ntfy_enabled' name='ntfy_enabled' style='width:auto'");
+    if(ntfy_enabled)h += F(" checked");
+    h += F("><strong>Enable ntfy</strong> (master on/off)</label>"
+      "<div style='margin:10px 0 4px;font-size:12px;color:#9e9e9e;"
+      "text-transform:uppercase;letter-spacing:1px'>What to send:</div>"
+      "<label class='cb'><input type='checkbox' name='ntfy_on_batt' style='width:auto'");
+    if(ntfy_on_batt)h += F(" checked");
+    h += F("> Battery low / critical"
+      " <span style='color:#ef9a9a;font-size:12px'>(recommended ON)</span></label>"
+      "<label class='cb'><input type='checkbox' name='ntfy_on_boot' style='width:auto'");
+    if(ntfy_on_boot)h += F(" checked");
+    h += F("> Boot &amp; wake summary"
+      " <span style='color:#9e9e9e;font-size:12px'>(mirrors MQTT boot payload)</span></label>"
+      "<label class='cb'><input type='checkbox' name='ntfy_on_sleep' style='width:auto'");
+    if(ntfy_on_sleep)h += F(" checked");
+    h += F("> Going-to-sleep notification"
+      " <span style='color:#9e9e9e;font-size:12px'>(one message per sleep cycle)</span></label>"
+      "<label class='cb'><input type='checkbox' name='ntfy_on_publish' style='width:auto'");
+    if(ntfy_on_publish)h += F(" checked");
+    h += F("> On every sensor read"
+      " <span style='color:#9e9e9e;font-size:12px'>(verbose)</span></label>"
+      "<label>Server</label><input name='ntfy_server' value='");
+    h += ntfy_server;
+    h += F("' placeholder='ntfy.sh'>"
+      "<label>Topic</label><input name='ntfy_topic' value='");
+    h += ntfy_topic;
+    h += F("' placeholder='my-sensor-alerts'>"
+      "<label>Bearer Token (optional)</label>"
+      "<input type='password' name='ntfy_token' value='");
+    h += ntfy_token;
+    h += F("' placeholder='leave blank for public topics'></div>"
       "</div></div>"   // close mbody, mcard
       "<script>"
       "function mqttTab(n){"
@@ -3711,8 +3763,9 @@ void setupOTA() {
       "document.getElementById('dot_std').classList.toggle('on',document.getElementById('plat_std').checked);"
       "document.getElementById('dot_aio').classList.toggle('on',document.getElementById('plat_aio').checked);"
       "document.getElementById('dot_ubi').classList.toggle('on',document.getElementById('plat_ubi').checked);"
+      "document.getElementById('dot_ntfy').classList.toggle('on',document.getElementById('ntfy_enabled').checked);"
       "}"
-      "['plat_std','plat_aio','plat_ubi'].forEach(function(id){"
+      "['plat_std','plat_aio','plat_ubi','ntfy_enabled'].forEach(function(id){"
       "document.getElementById(id).addEventListener('change',syncMqttDots);"
       "});"
       "syncMqttDots();"
@@ -3775,43 +3828,7 @@ void setupOTA() {
       "OLED &amp; LED off &mdash; silent reads, maximum battery life</span></label>"
       "</div>"   // close wake-mode inner div
       "</div>");  // close Deep Sleep sec div
-    h += F("<div class='sec'><h2>ntfy Notifications</h2>"
-      "<div class='info'>Push alerts via <a href='https://ntfy.sh' target='_blank' "
-      "style='color:#64B5F6'>ntfy.sh</a> or self-hosted.<br>"
-      "Battery alerts fire independently &mdash; they don't require "
-      "the publish setting to be on.</div>"
-      "<label class='cb'><input type='checkbox' name='ntfy_enabled' style='width:auto'");
-    if(ntfy_enabled)h += F(" checked");
-    h += F("><strong>Enable ntfy</strong> (master on/off)</label>"
-      "<div style='margin:10px 0 4px;font-size:12px;color:#9e9e9e;"
-      "text-transform:uppercase;letter-spacing:1px'>What to send:</div>"
-      "<label class='cb'><input type='checkbox' name='ntfy_on_batt' style='width:auto'");
-    if(ntfy_on_batt)h += F(" checked");
-    h += F("> Battery low / critical"
-      " <span style='color:#ef9a9a;font-size:12px'>(recommended ON)</span></label>"
-      "<label class='cb'><input type='checkbox' name='ntfy_on_boot' style='width:auto'");
-    if(ntfy_on_boot)h += F(" checked");
-    h += F("> Boot &amp; wake summary"
-      " <span style='color:#9e9e9e;font-size:12px'>(mirrors MQTT boot payload)</span></label>"
-      "<label class='cb'><input type='checkbox' name='ntfy_on_sleep' style='width:auto'");
-    if(ntfy_on_sleep)h += F(" checked");
-    h += F("> Going-to-sleep notification"
-      " <span style='color:#9e9e9e;font-size:12px'>(one message per sleep cycle)</span></label>"
-      "<label class='cb'><input type='checkbox' name='ntfy_on_publish' style='width:auto'");
-    if(ntfy_on_publish)h += F(" checked");
-    h += F("> On every sensor read"
-      " <span style='color:#9e9e9e;font-size:12px'>(verbose)</span></label>"
-      "<label>Server</label><input name='ntfy_server' value='");
-    h += ntfy_server;
-    h += F("' placeholder='ntfy.sh'>"
-      "<label>Topic</label><input name='ntfy_topic' value='");
-    h += ntfy_topic;
-    h += F("' placeholder='my-sensor-alerts'>"
-      "<label>Bearer Token (optional)</label>"
-      "<input type='password' name='ntfy_token' value='");
-    h += ntfy_token;
-    h += F("' placeholder='leave blank for public topics'></div>"
-      "<div class='sec'><h2>&#x1F321;&#xFE0F; Sensor Alerts</h2>"
+    h += F("<div class='sec'><h2>&#x1F321;&#xFE0F; Sensor Alerts</h2>"
       "<div class='info'>Send ntfy alerts when temperature or humidity crosses these limits. Requires ntfy to be enabled above. "
       "1&#176;C / 2% hysteresis prevents spam.</div>"
       "<label class='cb'><input type='checkbox' name='ntfy_on_sensor' style='width:auto'");
