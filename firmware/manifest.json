@@ -1,8 +1,8 @@
 {
   "version": "5.49",
-  "build_date": "2026-06-29",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.48/heltec_wifkit32v2_v548_33978E6C_firmware.ino.bin",
-  "size": 1417.3,
-  "crc32": "33978E6C",
+  "build_date": "2026-07-02",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.49/heltec_wifkit32v2_v549_FF9E4873_firmware.ino.bin",
+  "size": 1419.9,
+  "crc32": "FF9E4873",
   "changelog": "ui adjustments for mqtt setttings"
 }
