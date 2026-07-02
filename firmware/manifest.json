@@ -1,8 +1,8 @@
 {
   "version": "5.50",
   "build_date": "2026-07-02",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.49/heltec_wifkit32v2_v549_FF9E4873_firmware.ino.bin",
-  "size": 1419.9,
-  "crc32": "FF9E4873",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.50/heltec_wifkit32v2_v550_7C4BED90_firmware.ino.bin",
+  "size": 1420.1,
+  "crc32": "7C4BED90",
   "changelog": "ntfy moved into tabbed grp ui adjustments for mqtt setttings"
 }
