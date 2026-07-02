@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.48
- * Last Updated:  2026-06-29
+ * Version:       5.49
+ * Last Updated:  2026-07-02
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,19 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.49 — 2026-07-02
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - UI:  Standard MQTT / Adafruit IO / Ubidots merged into a single collapsible
+ *         "MQTT Platforms" card with tabbed sub-sections (Docksentry-style).
+ *         Open/closed via header click; tabs switch panels without page reload.
+ *         Each tab shows a live status dot synced to the Platform checkboxes
+ *         above (green = enabled). Default active tab = first enabled platform.
+ *         Field names, values, and POST handling completely unchanged — this is
+ *         a pure presentation/grouping change, no server-side logic touched.
+ *         Device name, Platform picker, and Publish Interval remain standalone
+ *         sections above the card, unchanged.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.48 — 2026-06-29
@@ -118,7 +131,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.48"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.49"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -2189,6 +2202,21 @@ static const char COMMON_CSS[] PROGMEM =
   ".info{background:#1a237e;padding:12px;border-radius:6px;margin:12px 0;font-size:12px;color:#90caf9;border:1px solid #283593}"
   ".cb{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;color:#e0e0e0;font-size:14px}"
   ".cb input{width:16px;height:16px;cursor:pointer}"
+  ".mcard{background:#1f1f1f;border-radius:8px;border:1px solid #424242;margin:16px 0;overflow:hidden}"
+  ".mhead{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;cursor:pointer;user-select:none}"
+  ".mhead h2{margin:0;color:#9e9e9e;font-size:16px;border:0;padding:0}"
+  ".mchev{color:#64B5F6;font-size:13px;transition:transform .2s}"
+  ".mcard.open .mchev{transform:rotate(90deg)}"
+  ".mbody{max-height:0;overflow:hidden;transition:max-height .3s ease}"
+  ".mcard.open .mbody{max-height:900px}"
+  ".mtabs{display:flex;gap:2px;padding:0 12px;border-top:1px solid #424242;border-bottom:1px solid #424242;background:#1a1a1a;overflow-x:auto}"
+  ".mtab{padding:11px 14px;cursor:pointer;color:#9e9e9e;font-size:13px;border-bottom:2px solid transparent;"
+  "display:flex;align-items:center;gap:7px;white-space:nowrap}"
+  ".mtab.active{color:#64B5F6;border-bottom-color:#64B5F6}"
+  ".mdot{width:7px;height:7px;border-radius:50%;background:#4a4a4a;flex-shrink:0}"
+  ".mdot.on{background:#66bb6a;box-shadow:0 0 4px #66bb6a}"
+  ".mpanel{display:none;padding:18px 20px}"
+  ".mpanel.active{display:block}"
   ".back{background:#757575;color:#fff !important}.back:hover{background:#616161}";
 // Return standard head string for buffered page sends
 static String pageHead(const String& title) {
@@ -3635,7 +3663,19 @@ void setupOTA() {
       "var u=parseInt(document.getElementById('pi_unit').value)||60;"
       "document.getElementById('pub_timer').value=Math.max(60,Math.min(604800,v*u));"
       "});})();</script></div>"
-      "<div class='sec'><h2>Standard MQTT</h2>"
+      "<div class='mcard open' id='mqttCard'>"
+      "<div class='mhead' onclick=\"this.parentElement.classList.toggle('open')\">"
+      "<h2>MQTT Platforms</h2><span class='mchev'>&#9656;</span></div>"
+      "<div class='mbody'>"
+      "<div class='mtabs'>"
+      "<div class='mtab active' data-tab='std' onclick=\"mqttTab('std')\">"
+      "<span class='mdot' id='dot_std'></span>Standard</div>"
+      "<div class='mtab' data-tab='aio' onclick=\"mqttTab('aio')\">"
+      "<span class='mdot' id='dot_aio'></span>Adafruit IO</div>"
+      "<div class='mtab' data-tab='ubi' onclick=\"mqttTab('ubi')\">"
+      "<span class='mdot' id='dot_ubi'></span>Ubidots</div>"
+      "</div>"
+      "<div class='mpanel active' id='panel_std'>"
       "<div class='info'>Local broker e.g. Mosquitto</div>"
       "<label>Server</label><input name='mqtt_server' value='");
     h += mqtt_server;
@@ -3649,18 +3689,42 @@ void setupOTA() {
     h += F("'><label>Topic</label><input name='mqtt_topic' value='");
     h += mqtt_topic;
     h += F("'></div>"
-      "<div class='sec'><h2>Adafruit IO</h2>"
+      "<div class='mpanel' id='panel_aio'>"
       "<label>Username</label><input name='aio_user' value='");
     h += aio_username;
     h += F("'><label>Key</label><input type='password' name='aio_key' value='");
     h += aio_key;
     h += F("'></div>"
-      "<div class='sec'><h2>Ubidots</h2>"
+      "<div class='mpanel' id='panel_ubi'>"
       "<label>Token</label><input type='password' name='ubi_token' value='");
     h += ubidots_token;
     h += F("'><label>Device Label</label><input name='ubi_device' value='");
     h += ubidots_device;
     h += F("'></div>"
+      "</div></div>"   // close mbody, mcard
+      "<script>"
+      "function mqttTab(n){"
+      "document.querySelectorAll('.mtab').forEach(function(t){t.classList.toggle('active',t.dataset.tab===n);});"
+      "document.querySelectorAll('.mpanel').forEach(function(p){p.classList.toggle('active',p.id==='panel_'+n);});"
+      "}"
+      "function syncMqttDots(){"
+      "document.getElementById('dot_std').classList.toggle('on',document.getElementById('plat_std').checked);"
+      "document.getElementById('dot_aio').classList.toggle('on',document.getElementById('plat_aio').checked);"
+      "document.getElementById('dot_ubi').classList.toggle('on',document.getElementById('plat_ubi').checked);"
+      "}"
+      "['plat_std','plat_aio','plat_ubi'].forEach(function(id){"
+      "document.getElementById(id).addEventListener('change',syncMqttDots);"
+      "});"
+      "syncMqttDots();"
+      "(function(){"
+      "var order=['std','aio','ubi'];"
+      "var chk={std:document.getElementById('plat_std').checked,"
+      "aio:document.getElementById('plat_aio').checked,"
+      "ubi:document.getElementById('plat_ubi').checked};"
+      "var first=order.find(function(k){return chk[k];})||'std';"
+      "mqttTab(first);"
+      "})();"
+      "</script>"
       "<div class='sec'><h2>Deep Sleep</h2>"
       "<div class='info'>Board wakes&rarr;reads&rarr;publishes&rarr;sleeps.<br>"
       "Single click=10min awake. Hold 3s=sleep now.</div>"
