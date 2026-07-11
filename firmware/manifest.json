@@ -1,8 +1,8 @@
 {
-  "version": "5.50",
+  "version": "5.51",
   "build_date": "2026-07-02",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.50/heltec_wifkit32v2_v550_7C4BED90_firmware.ino.bin",
   "size": 1420.1,
   "crc32": "7C4BED90",
-  "changelog": "ntfy moved into tabbed grp ui adjustments for mqtt setttings"
+  "changelog": "debug the brownout reasons into serial / ntfy outputs"
 }

@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.50
- * Last Updated:  2026-07-02
+ * Version:       5.51
+ * Last Updated:  2026-07-11
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,20 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.51 — 2026-07-11
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - DEBUG: esp_reset_reason() (already read by printResetReason() at boot,
+ *           previously Serial-only) is now latched into lastResetReasonStr and
+ *           surfaced in the ntfy boot message ("Reset: ...") and MQTT boot
+ *           JSON ("reset_reason"). Distinguishes a genuine BROWNOUT from a
+ *           normal cold power-on — both currently report identically as
+ *           "Wake: power-on" from esp_sleep_get_wakeup_cause() alone, which
+ *           made it impossible to tell whether "power-on" boots after a 120min
+ *           sleep were expected timer wakes gone wrong or actual brownouts.
+ *           ntfy title flags "Boot (BROWNOUT!)" distinctly so it's visible
+ *           without opening the notification body.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.50 — 2026-07-02
@@ -145,7 +159,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.50"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.51"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -653,18 +667,24 @@ String getTotalUptime() {
 }
 
 // Logs the hardware reset reason to Serial — first thing called in setup()
+// v5.51: also latched into lastResetReasonStr for ntfy/MQTT boot reports —
+// lets us tell a genuine brownout apart from a normal timer wake even when
+// esp_sleep_get_wakeup_cause() itself reports "power-on" (undefined cause).
+String lastResetReasonStr = "unknown";
+
 void printResetReason() {
   Serial.print("[BOOT] Reset reason: ");
   switch (esp_reset_reason()) {
-    case ESP_RST_POWERON:  Serial.println("Power on"); break;
-    case ESP_RST_SW:       Serial.println("Software (ESP.restart)"); break;
-    case ESP_RST_PANIC:    Serial.println("Exception/panic"); break;
-    case ESP_RST_INT_WDT:  Serial.println("Interrupt watchdog"); break;
-    case ESP_RST_TASK_WDT: Serial.println("Task watchdog — loop blocked!"); break;
-    case ESP_RST_BROWNOUT: Serial.println("Brownout — check PSU"); break;
-    case ESP_RST_DEEPSLEEP:Serial.println("Deep sleep wakeup"); break;
-    default:               Serial.println("Other/unknown"); break;
+    case ESP_RST_POWERON:  lastResetReasonStr = "power-on";        break;
+    case ESP_RST_SW:       lastResetReasonStr = "software-restart";break;
+    case ESP_RST_PANIC:    lastResetReasonStr = "panic";           break;
+    case ESP_RST_INT_WDT:  lastResetReasonStr = "int-wdt";         break;
+    case ESP_RST_TASK_WDT: lastResetReasonStr = "task-wdt";        break;
+    case ESP_RST_BROWNOUT: lastResetReasonStr = "BROWNOUT";        break;
+    case ESP_RST_DEEPSLEEP:lastResetReasonStr = "deepsleep-wake";  break;
+    default:               lastResetReasonStr = "other";           break;
   }
+  Serial.println(lastResetReasonStr);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2018,6 +2038,7 @@ void publishBootSummary() {
     doc["sleep_wakes"]  = (uint32_t)rtcBootOffset;
     doc["uptime_total_s"] = (ntpSynced && rtcBootEpoch) ? (uint32_t)time(nullptr) - rtcBootEpoch : 0;
     doc["wakeup"]       = reason;
+    doc["reset_reason"] = lastResetReasonStr;
     doc["wake_mode"]    = (wakeDisplayMode == 0) ? "stealth" : "active";
     doc["ip"]           = WiFi.localIP().toString();
     doc["batt_v"]       = serialized(String(v, 2));
@@ -2067,6 +2088,7 @@ void publishBootSummary() {
     String wakeIcon;
     if (reason == "button")   { ntfyTitle = "Wake (button)"; wakeIcon = "hand"; }
     else if (reason == "timer") { ntfyTitle = "Wake (timer)";  wakeIcon = "alarm_clock"; }
+    else if (lastResetReasonStr == "BROWNOUT") { ntfyTitle = "Boot (BROWNOUT!)"; wakeIcon = "warning"; }
     else                        { ntfyTitle = "Boot";          wakeIcon = "electric_plug"; }
 
     // Power source icon — three states
@@ -2079,7 +2101,7 @@ void publishBootSummary() {
     String hStr = (!isnan(humidity)    && humidity    != 0.0f) ? String(humidity,    1) + "%" : "--";
     String msg = "Temp: " + tStr + "  Hum: " + hStr + "\n"
                  "Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
-                 "Wake: " + reason + "  Mode: " + modeStr + "  Boot#" + String(bootCount) + "\n"
+                 "Wake: " + reason + "  Reset: " + lastResetReasonStr + "  Mode: " + modeStr + "  Boot#" + String(bootCount) + "\n"
                  "On: " + getTotalUptime() + "\n"
                  "IP: " + WiFi.localIP().toString() + "  v" + FW_VERSION;
     int est = estSleepsRemaining();
