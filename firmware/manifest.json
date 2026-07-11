@@ -1,8 +1,8 @@
 {
   "version": "5.51",
-  "build_date": "2026-07-02",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.50/heltec_wifkit32v2_v550_7C4BED90_firmware.ino.bin",
-  "size": 1420.1,
-  "crc32": "7C4BED90",
+  "build_date": "2026-07-11",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.51/heltec_wifkit32v2_v551_C35CF826_firmware.ino.bin",
+  "size": 1420.2,
+  "crc32": "C35CF826",
   "changelog": "debug the brownout reasons into serial / ntfy outputs"
 }
