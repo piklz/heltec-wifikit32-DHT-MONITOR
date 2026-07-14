@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.51
- * Last Updated:  2026-07-11
+ * Version:       5.52
+ * Last Updated:  2026-07-14
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,44 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.52 — 2026-07-14
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Stealth timer wake that fails to reconnect (fast static-IP path AND
+ *         full WiFiManager autoConnect() both fail) no longer calls
+ *         ESP.restart(). That blind restart-on-failure was the most likely
+ *         cause of the "missing boot numbers" gaps seen in ntfy logs (e.g.
+ *         Boot#5 -> Boot#9): each failed connect attempt under a sagging
+ *         battery restarted the chip before publishBootSummary() could ever
+ *         run, so nothing was reported for those cycles even though the NVS
+ *         boot counter incremented every time.
+ *         Fix: stealth-wake connect failures now increment rtcWifiFailStreak
+ *         (RTC memory, survives the next timer wake) and log rtcLastFailMv
+ *         (raw ADC mV at the moment of failure), then go straight to
+ *         goToDeepSleep() instead of restarting. The next cycle that DOES
+ *         connect reports "WiFi fails since last report: N" in both the ntfy
+ *         message and MQTT boot JSON, so failed cycles are now visible
+ *         instead of silent. Active/button wakes and forced-portal (double
+ *         reset) behaviour is unchanged — still restarts on failure, since a
+ *         person is actually present for those.
+ *  - FIX: Config portal timeout was a flat 180 s regardless of wake type,
+ *         meaning a stealth timer wake with no saved-network connection would
+ *         sit in an unattended AP/portal state (nobody can reach it) for up
+ *         to 3 minutes, burning battery, before finally failing. Stealth
+ *         wakes now use a 10 s portal timeout; Active/button/forced-portal
+ *         wakes keep 180 s since a person may actually be configuring it.
+ *  - DEBUG: Added a consistency check between esp_reset_reason() and
+ *         rtcBootEpoch. The RTC-memory-preservation assumption documented at
+ *         the truePowerEvent check (soft resets should never clear
+ *         rtcBootEpoch) was directly contradicted by the v5.51 logs — a
+ *         software-restart boot (Boot#9) showed "On: 1s", meaning RTC memory
+ *         was disturbed despite a non-power reset reason. rtcEpochGlitchThisBoot
+ *         now flags exactly that mismatch and surfaces it in the ntfy Reset:
+ *         field and MQTT boot JSON ("rtc_epoch_glitch") instead of silently
+ *         trusting the reset-reason register — this is the clearest available
+ *         signal of a marginal power event too brief/shallow to trip the
+ *         hardware brownout detector.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.51 — 2026-07-11
@@ -159,7 +197,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.51"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.52"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -370,6 +408,20 @@ RTC_DATA_ATTR uint32_t rtcBootEpoch        = 0;
 // subtract any overshoot from the next sleep so cycles self-correct.
 // Zero = no prior epoch stored (first boot or power-loss wiped RTC).
 RTC_DATA_ATTR uint32_t rtcNextWakeEpoch    = 0;
+
+// ── Stealth-wake WiFi failure diagnostics (v5.52) ─────────────────────────────
+// Incremented (not reset to a restart) when a stealth timer wake fails to
+// connect — RTC memory survives the immediately-following deep sleep, so the
+// NEXT wake that does connect can report how many silent failures preceded
+// it instead of those cycles vanishing with no ntfy/MQTT record at all.
+RTC_DATA_ATTR uint32_t rtcWifiFailStreak   = 0;
+RTC_DATA_ATTR uint32_t rtcLastFailMv       = 0;    // raw ADC mV at the failed attempt
+// Set in setup() when a non-power reset reason (SW/PANIC/WDT) is nonetheless
+// accompanied by rtcBootEpoch==0 — i.e. RTC memory was disturbed even though
+// esp_reset_reason() didn't report POWERON/BROWNOUT. Surfaced in reports as
+// the clearest available signal of a marginal power event the hardware BOD
+// didn't catch. Not RTC_DATA_ATTR — recomputed fresh every boot.
+bool rtcEpochGlitchThisBoot = false;
 
 // ── Static IP cache (RTC) — populated after first DHCP, reused on timer wakes
 // to skip DHCP negotiation and cut WiFi connect time from ~3s to ~400ms.
@@ -1780,7 +1832,11 @@ void setupWiFiManager(bool forcePortal) {
   wm.addParameter(&p_ds_min);
 
   wm.setSaveConfigCallback(saveConfigCallback);
-  wm.setConfigPortalTimeout(180);
+  // v5.52: Stealth timer wakes are unattended -- nobody can reach the portal
+  // AP anyway, so there's no point burning battery sitting in it for 3 min.
+  // Active/button/forced-portal wakes keep the full window since a person
+  // may genuinely be configuring the device.
+  wm.setConfigPortalTimeout(stealthThisWake ? 10 : 180);
 
   // Called by WiFiManager the moment the AP/portal opens (both auto and forced).
   // Switches OLED to portal-info frame and sets portalActive flag immediately.
@@ -1807,6 +1863,20 @@ void setupWiFiManager(bool forcePortal) {
   portalActive = false;
 
   if (!connected) {
+    if (stealthThisWake) {
+      // v5.52: don't blind-restart an unattended stealth wake -- that was the
+      // most likely cause of the silent boot-count gaps seen in the ntfy logs.
+      // Log a breadcrumb in RTC memory (survives the deep sleep we're about
+      // to enter) and go straight back to sleep; the next wake that DOES
+      // connect will report how many failures preceded it.
+      rtcWifiFailStreak++;
+      rtcLastFailMv = (uint32_t)analogReadMilliVolts(37);  // raw, uncalibrated -- diagnostic only
+      Serial.printf("[WiFi] Stealth connect failed (streak=%u, raw=%umV) -- sleeping, no restart\n",
+                    rtcWifiFailStreak, rtcLastFailMv);
+      wifiConnected = false;
+      goToDeepSleep();  // does not return
+      return;
+    }
     Serial.println("[WiFi] Connection failed — restarting");
     delay(1000);
     ESP.restart();
@@ -2039,6 +2109,8 @@ void publishBootSummary() {
     doc["uptime_total_s"] = (ntpSynced && rtcBootEpoch) ? (uint32_t)time(nullptr) - rtcBootEpoch : 0;
     doc["wakeup"]       = reason;
     doc["reset_reason"] = lastResetReasonStr;
+    doc["rtc_epoch_glitch"] = rtcEpochGlitchThisBoot;
+    doc["wifi_fails_since_last_report"] = rtcWifiFailStreak;
     doc["wake_mode"]    = (wakeDisplayMode == 0) ? "stealth" : "active";
     doc["ip"]           = WiFi.localIP().toString();
     doc["batt_v"]       = serialized(String(v, 2));
@@ -2099,11 +2171,16 @@ void publishBootSummary() {
 
     String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "C" : "--";
     String hStr = (!isnan(humidity)    && humidity    != 0.0f) ? String(humidity,    1) + "%" : "--";
+    String resetStr = lastResetReasonStr + (rtcEpochGlitchThisBoot ? " (RTC glitch?)" : "");
     String msg = "Temp: " + tStr + "  Hum: " + hStr + "\n"
                  "Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
-                 "Wake: " + reason + "  Reset: " + lastResetReasonStr + "  Mode: " + modeStr + "  Boot#" + String(bootCount) + "\n"
+                 "Wake: " + reason + "  Reset: " + resetStr + "  Mode: " + modeStr + "  Boot#" + String(bootCount) + "\n"
                  "On: " + getTotalUptime() + "\n"
                  "IP: " + WiFi.localIP().toString() + "  v" + FW_VERSION;
+    if (rtcWifiFailStreak > 0) {
+      msg += "\nWiFi fails since last report: " + String(rtcWifiFailStreak) +
+             "  (last raw: " + String(rtcLastFailMv) + "mV)";
+    }
     int est = estSleepsRemaining();
     if (est >= 0) msg += "\n~" + String(est) + " sleeps remaining";
     sendNtfy(ntfyTitle + ": " + device_name, msg, 2, wakeIcon + "," + srcIcon);
@@ -2112,6 +2189,11 @@ void publishBootSummary() {
     if (ntfy_enabled && !ntfy_on_boot) Serial.println("[NTFY-BOOT] Skipped -- on_boot disabled");
     if (!ntfy_topic.length())          Serial.println("[NTFY-BOOT] Skipped -- topic empty");
   }
+
+  // v5.52: reaching here means WiFi connected and this boot got at least a
+  // chance to report (regardless of which platforms are enabled) -- clear
+  // the streak so it reflects failures since the last successful boot only.
+  rtcWifiFailStreak = 0;
 
   Serial.println("[BOOT] Summary published");
 }
@@ -4565,6 +4647,15 @@ void setup() {
     rtcBootOffset = 0;
     esp_reset_reason_t rstReason = esp_reset_reason();
     bool truePowerEvent = (rstReason == ESP_RST_POWERON || rstReason == ESP_RST_BROWNOUT);
+    // v5.52: a non-power reset reason should NEVER see rtcBootEpoch already at
+    // 0 here — that combination means RTC memory was disturbed by something
+    // the reset-reason register didn't classify as a power event. Flag it
+    // before the truePowerEvent branch below (potentially) zeroes it anyway.
+    if (!truePowerEvent && rtcBootEpoch == 0) {
+      rtcEpochGlitchThisBoot = true;
+      Serial.println(F("[BOOT] WARNING: non-power reset but rtcBootEpoch==0 -- "
+                        "RTC memory disturbed without a BROWNOUT/POWERON reset reason"));
+    }
     if (truePowerEvent) {
       rtcBootEpoch = 0;   // RTC truly wiped — fresh power-on tracking starts now
     }
