@@ -1,8 +1,8 @@
 {
-  "version": "5.52",
+  "version": "5.53",
   "build_date": "2026-07-14",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.52/heltec_wifkit32v2_v552_0D0C54CC_firmware.ino.bin",
   "size": 1421.1,
   "crc32": "0D0C54CC",
-  "changelog": "No more blind ESP.restart() on a failed stealth-wake connect \u2014 it now bumps rtcWifiFailStreak/rtcLastFailMv ,Config portal timeout is 10s for stealth wakes, still 180s for Active/button/forced-portal ,Next successful boot reports the streak \u2014 WiFi fails since last report: N (last raw: XmV) in the ntfy body "
+  "changelog": "150ms settle delay added before WiFi teardown in powerDownPeripherals() Brownout recovery now treated as stealth wake"
 }
