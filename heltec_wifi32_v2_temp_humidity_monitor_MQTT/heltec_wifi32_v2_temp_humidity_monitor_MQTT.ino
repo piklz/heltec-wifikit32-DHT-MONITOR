@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.52
- * Last Updated:  2026-07-14
+ * Version:       5.53
+ * Last Updated:  2026-07-16
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,40 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.53 — 2026-07-16
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: A genuine BROWNOUT reset previously always forced the full Active
+ *         boot path (OLED + LED on, 180s WiFiManager portal budget) because
+ *         stealthThisWake was gated on wokeByTimer alone, and a brownout
+ *         reset reports wakeup cause as undefined, not TIMER. That meant the
+ *         single most power-hungry boot path ran automatically at exactly
+ *         the moment the supply was already stressed enough to have browned
+ *         out. stealthThisWake now also goes true on a BROWNOUT reset (when
+ *         Stealth is the configured wakeDisplayMode) -- no OLED/LED, and the
+ *         v5.52 10s stealth portal timeout now actually applies to brownout
+ *         recoveries too. Side effect: the "Mode: Stealth" label in ntfy
+ *         reports (which reflects the configured setting, not runtime
+ *         behaviour) is now also true to what actually happened this boot.
+ *  - FIX: powerDownPeripherals() fired the MQTT "sleeping" status publish,
+ *         then the ntfy Sleep: HTTP POST, then began WiFi teardown
+ *         (disconnect/WIFI_OFF/esp_wifi_stop()) with under ~200ms of total
+ *         gap between the last TX and the radio-off transition. That's the
+ *         heaviest current draw of the whole cycle stacked directly against
+ *         a transition that has its own brief current cost. Added a 150ms
+ *         settle delay after the last publish/notify call and before WiFi
+ *         teardown starts, and widened the pre-esp_wifi_stop() delay from
+ *         100ms to 150ms, to reduce the odds of exactly that pattern (which
+ *         matched the "clean wake, brownout right at sleep-entry" cycles
+ *         seen in the v5.52 logs almost exactly).
+ *  - NOTE: Neither fix changes the underlying current-delivery headroom of
+ *         the battery/regulator -- a bulk capacitor across the battery input
+ *         near the regulator is still the recommended hardware fix if
+ *         brownouts continue. These changes reduce how often the firmware's
+ *         own behaviour asks for a current spike at a bad moment, and make
+ *         sure a brownout, if it happens anyway, is handled as cheaply as
+ *         possible instead of triggering the most expensive boot path.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.52 — 2026-07-14
@@ -197,7 +231,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.52"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.53"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1366,7 +1400,16 @@ void powerDownPeripherals() {
     sendNtfy("Sleep: " + device_name, msg, 1, "zzz,crescent_moon");
   }
   mqttStd.disconnect(); mqttAIO.disconnect(); mqttUBI.disconnect();
-  if (ps_wifi) { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); delay(100); esp_wifi_stop(); }
+  // v5.53: the MQTT status publish + ntfy HTTP POST above are the last (and
+  // often heaviest) radio TX of the whole cycle. Give the battery a brief
+  // window to recover from that draw BEFORE starting the WiFi teardown --
+  // WiFi.disconnect()/esp_wifi_stop() have their own brief current transient
+  // during PHY/RF cleanup, and stacking that right against the tail of an
+  // HTTP POST with no gap was a strong match for the "clean wake, instant
+  // brownout at sleep-entry" pattern seen in the ntfy logs (10:52 and 14:52
+  // cycles, both immediately after a Sleep/ntfy publish).
+  delay(150);
+  if (ps_wifi) { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); delay(150); esp_wifi_stop(); }
   else         { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); delay(50); }
   if (ps_bt)   { btStop(); if (esp_bt_controller_get_status()!=ESP_BT_CONTROLLER_STATUS_IDLE) esp_bt_controller_disable(); }
   if (ps_oled) { display.displayOff(); }
@@ -4628,6 +4671,10 @@ void setup() {
   bool wokeByButton = (wakeupCause == ESP_SLEEP_WAKEUP_EXT0);
   bool wokeByTimer  = (wakeupCause == ESP_SLEEP_WAKEUP_TIMER);
   bool wokeFromSleep = wokeByButton || wokeByTimer;
+  // v5.53: read once, up front -- both the boot-counter branch below and the
+  // stealthThisWake computation further down need to see the reset reason.
+  esp_reset_reason_t rstReason     = esp_reset_reason();
+  bool wokeFromBrownout = (rstReason == ESP_RST_BROWNOUT);
 
   if (wokeFromSleep) {
     // Sleep wake: just increment RTC counter — no NVS write, no flash wear
@@ -4645,7 +4692,6 @@ void setup() {
     // on true power events — otherwise an OTA reboot or WDT would silently reset
     // the "powered on" clock mid-run.
     rtcBootOffset = 0;
-    esp_reset_reason_t rstReason = esp_reset_reason();
     bool truePowerEvent = (rstReason == ESP_RST_POWERON || rstReason == ESP_RST_BROWNOUT);
     // v5.52: a non-power reset reason should NEVER see rtcBootEpoch already at
     // 0 here — that combination means RTC memory was disturbed by something
@@ -4675,7 +4721,14 @@ void setup() {
   // because ui.init() sends the SSD1306 init sequence which turns the display on.
   // We need to call displayOff() immediately after for Stealth timer wakes.
   loadDeepSleepConfig();
-  stealthThisWake = (wakeDisplayMode == 0) && wokeByTimer;
+  // v5.53: a brownout mid-cycle is virtually never a person physically at the
+  // device -- it's a stealth timer wake that got interrupted. Previously this
+  // fell to wokeByTimer==false and forced the full Active boot path (OLED +
+  // LED on, 180s WiFiManager portal budget) at exactly the moment the supply
+  // was most stressed. Now it's treated like stealth for power purposes,
+  // same as a normal timer wake, as long as Stealth mode is the configured
+  // wakeDisplayMode -- an Active-mode setup still behaves as before.
+  stealthThisWake = (wakeDisplayMode == 0) && (wokeByTimer || wokeFromBrownout);
 
   // Hardware init — Vext already on from powerUpPeripherals(); just set button pin
   pinMode(BUTTON_PIN, INPUT_PULLUP);
