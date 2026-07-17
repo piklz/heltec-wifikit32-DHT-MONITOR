@@ -1,8 +1,8 @@
 {
   "version": "5.53",
-  "build_date": "2026-07-14",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.52/heltec_wifkit32v2_v552_0D0C54CC_firmware.ino.bin",
+  "build_date": "2026-07-17",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.53/heltec_wifkit32v2_v553_1D84BA67_firmware.ino.bin",
   "size": 1421.1,
-  "crc32": "0D0C54CC",
+  "crc32": "1D84BA67",
   "changelog": "150ms settle delay added before WiFi teardown in powerDownPeripherals() Brownout recovery now treated as stealth wake"
 }
