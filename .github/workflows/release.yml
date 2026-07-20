@@ -49,27 +49,33 @@ jobs:
           arduino-cli config init --overwrite
           arduino-cli config set board_manager.additional_urls "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
           arduino-cli core update-index
-          arduino-cli core install esp32:esp32
+          # PINNED: matches locally installed/tested esp32 core version
+          # (esp32 by espressif systems, via Boards Manager)
+          arduino-cli core install esp32:esp32@3.3.10
 
       - name: Install System Dependencies & Custom Libraries
         run: |
           mkdir -p $HOME/Arduino/libraries
 
-          if [ -d "$HOME/Arduino/libraries/WiFiManager" ]; then
-            echo "WiFiManager already exists. Updating via git pull..."
-            cd $HOME/Arduino/libraries/WiFiManager && git pull
-          else
-            echo "Cloning WiFiManager fresh..."
-            git clone https://github.com/tzapu/WiFiManager.git $HOME/Arduino/libraries/WiFiManager
-          fi
-          
-          arduino-cli lib install "Heltec ESP32 Dev-Boards"
-          arduino-cli lib install "PubSubClient"
-          arduino-cli lib install "DHT sensor library"
-          arduino-cli lib install "Adafruit Unified Sensor"
-          arduino-cli lib install "ArduinoJson"
-          arduino-cli lib install "OneButton"
-          arduino-cli lib install "JLed"
+          # PINNED to a release tag, not the default branch. Previously this
+          # block did `git pull` on every re-run when the checkout already
+          # existed (only relevant on the self-hosted Local-Pi5 runner, since
+          # GitHub-hosted runners always start from a clean filesystem) --
+          # that silently moved WiFiManager forward on every retrigger with
+          # no corresponding commit in this repo to explain why a build
+          # started failing. Always re-clone at a known tag instead.
+          rm -rf "$HOME/Arduino/libraries/WiFiManager"
+          git clone --branch v2.0.17 --depth 1 https://github.com/tzapu/WiFiManager.git "$HOME/Arduino/libraries/WiFiManager"
+
+          # PINNED: matches locally installed/tested versions (Arduino IDE ->
+          # Sketch -> Include Library -> Manage Libraries)
+          arduino-cli lib install "Heltec ESP32 Dev-Boards@2.1.6"
+          arduino-cli lib install "PubSubClient@2.8"
+          arduino-cli lib install "DHT sensor library@1.4.7"
+          arduino-cli lib install "Adafruit Unified Sensor@1.1.15"
+          arduino-cli lib install "ArduinoJson@7.4.3"
+          arduino-cli lib install "OneButton@2.6.2"
+          arduino-cli lib install "JLed@4.15.0"
 
       - name: Compile Heltec V2 Binary
         run: |
