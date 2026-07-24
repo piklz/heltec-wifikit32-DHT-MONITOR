@@ -1,8 +1,8 @@
 {
   "version": "5.55",
   "build_date": "2026-07-24",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.54/heltec_wifkit32v2_v554_16BB404E_firmware.ino.bin",
-  "size": 1420.5,
-  "crc32": "16BB404E",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.55/heltec_wifkit32v2_v555_94AE3BD2_firmware.ino.bin",
+  "size": 1424.0,
+  "crc32": "94AE3BD2",
   "changelog": "auto update fimware if avail ui"
 }
