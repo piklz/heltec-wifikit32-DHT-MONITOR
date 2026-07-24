@@ -1,8 +1,8 @@
 {
   "version": "5.54",
-  "build_date": "2026-07-20",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.53/heltec_wifkit32v2_v553_F50E68A9_firmware.ino.bin",
-  "size": 1419.7,
-  "crc32": "F50E68A9",
-  "changelog": "ntfy: Boot#41 (reset#34 +7) — self-explanatory MQTT: new reset_count field pairs with the sleep_wakes,web dashboard: hover tooltip on the footer's Boot#"
+  "build_date": "2026-07-24",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.54/heltec_wifkit32v2_v554_16BB404E_firmware.ino.bin",
+  "size": 1420.5,
+  "crc32": "16BB404E",
+  "changelog": "ntfy: Boot#41 (reset#34 +7) \u2014 self-explanatory MQTT: new reset_count field pairs with the sleep_wakes,web dashboard: hover tooltip on the footer's Boot#"
 }
