@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.53
- * Last Updated:  2026-07-16
+ * Version:       5.54
+ * Last Updated:  2026-07-24
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,26 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.54 — 2026-07-24
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - CLARITY: The displayed Boot# is bootCount = nvsBootBase (lifetime hard
+ *         resets, NVS-persisted) + rtcBootOffset (sleep-wake cycles since
+ *         that last reset, RTC-memory only, zeroed on any non-sleep reset).
+ *         This is correct and intentional (avoids an NVS flash write every
+ *         2h sleep cycle), but a genuine reset event makes the combined
+ *         number drop sharply with nothing in the report explaining why --
+ *         e.g. Boot#105 -> Boot#34 after an int-wdt reset, which read like
+ *         data loss/corruption even though nothing was actually lost.
+ *         ntfy boot/wake messages, the standard-platform MQTT boot JSON, and
+ *         the web dashboard footer (via hover tooltip) now all show the
+ *         breakdown explicitly: "Boot#41 (reset#34 +7)" -- reset#34 is
+ *         nvsBootBase (lifetime resets), +7 is rtcBootOffset (cycles since).
+ *         MQTT gains a new reset_count field alongside the existing
+ *         sleep_wakes field (which was already rtcBootOffset, just not
+ *         paired with the reset count it's offset from). No change to the
+ *         underlying counting logic or NVS write frequency -- display only.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.53 — 2026-07-16
@@ -231,7 +251,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.53"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.54"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -476,6 +496,13 @@ RTC_DATA_ATTR uint32_t rtcHistTime[HIST_SIZE] = {};
 RTC_DATA_ATTR uint8_t  rtcHistCount           = 0;
 RTC_DATA_ATTR uint8_t  rtcHistHead            = 0;
 int                    bootCount           = 0;    // combined display value, set in setup()
+// v5.54: lifetime hard-reset count (NVS-persisted value alone, no RTC offset
+// added). Set alongside bootCount in setup() so report-building code later
+// in the boot can show "resets: N, cycles since: M" instead of just the
+// combined total -- a reset event previously made the combined number drop
+// sharply (e.g. Boot#105 -> Boot#34) with nothing in the report explaining
+// why, since rtcBootOffset resetting to 0 was invisible in the display.
+uint32_t               nvsBootBase         = 0;
 
 bool          deepSleepEnabled         = false;
 uint32_t      deepSleepMinutes         = 10;
@@ -2148,7 +2175,8 @@ void publishBootSummary() {
     doc["device"]       = device_name;
     doc["version"]      = FW_VERSION;
     doc["boot_count"]   = bootCount;
-    doc["sleep_wakes"]  = (uint32_t)rtcBootOffset;
+    doc["reset_count"]  = (uint32_t)nvsBootBase;   // v5.54: lifetime hard-reset count alone
+    doc["sleep_wakes"]  = (uint32_t)rtcBootOffset;  // cycles since that last reset
     doc["uptime_total_s"] = (ntpSynced && rtcBootEpoch) ? (uint32_t)time(nullptr) - rtcBootEpoch : 0;
     doc["wakeup"]       = reason;
     doc["reset_reason"] = lastResetReasonStr;
@@ -2215,9 +2243,11 @@ void publishBootSummary() {
     String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "C" : "--";
     String hStr = (!isnan(humidity)    && humidity    != 0.0f) ? String(humidity,    1) + "%" : "--";
     String resetStr = lastResetReasonStr + (rtcEpochGlitchThisBoot ? " (RTC glitch?)" : "");
+    String bootStr = String(bootCount) + " (reset#" + String(nvsBootBase) +
+                      (rtcBootOffset > 0 ? " +" + String(rtcBootOffset) : "") + ")";
     String msg = "Temp: " + tStr + "  Hum: " + hStr + "\n"
                  "Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
-                 "Wake: " + reason + "  Reset: " + resetStr + "  Mode: " + modeStr + "  Boot#" + String(bootCount) + "\n"
+                 "Wake: " + reason + "  Reset: " + resetStr + "  Mode: " + modeStr + "  Boot#" + bootStr + "\n"
                  "On: " + getTotalUptime() + "\n"
                  "IP: " + WiFi.localIP().toString() + "  v" + FW_VERSION;
     if (rtcWifiFailStreak > 0) {
@@ -3303,7 +3333,8 @@ void setupOTA() {
     h += F("</span><span>v");
     h += FW_VERSION;
     h += F(" &nbsp;Boot#");
-    h += String(bootCount);
+    h += "<span title='reset#" + String(nvsBootBase) + " +" + String(rtcBootOffset) +
+         " sleep-wakes since'>" + String(bootCount) + "</span>";
     h += F("</span></div></div>");
 
     // Sensor alerts status strip (only if any threshold is currently breached)
@@ -4206,6 +4237,7 @@ void setupOTA() {
     // Reset both NVS base and RTC offset — counter starts from 1 on next power-on
     rtcBootOffset = 0;
     bootCount     = 1;
+    nvsBootBase   = 1;
     preferences.begin("sys", false);
     preferences.putInt("bootcount", 1);
     preferences.end();
@@ -4682,6 +4714,7 @@ void setup() {
     preferences.begin("sys", true);   // read-only
     uint32_t nvsBase = (uint32_t)preferences.getInt("bootcount", 0);
     preferences.end();
+    nvsBootBase = nvsBase;
     bootCount = (int)(nvsBase + rtcBootOffset);
     Serial.printf("[BOOT] Sleep wake — count %d (NVS base + RTC offset %u, no flash write)\n",
                   bootCount, rtcBootOffset);
@@ -4710,6 +4743,7 @@ void setup() {
     uint32_t nvsBase = (uint32_t)preferences.getInt("bootcount", 0) + 1;
     preferences.putInt("bootcount", (int)nvsBase);
     preferences.end();
+    nvsBootBase = nvsBase;
     bootCount = (int)nvsBase;
     Serial.printf("[BOOT] Power-on/crash — count %d written to NVS\n", bootCount);
   }

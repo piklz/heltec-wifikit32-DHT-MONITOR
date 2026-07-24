@@ -1,8 +1,10 @@
 {
-  "version": "5.53",
+  "version": "5.54",
   "build_date": "2026-07-17",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.53/heltec_wifkit32v2_v553_1D84BA67_firmware.ino.bin",
   "size": 1421.1,
   "crc32": "1D84BA67",
-  "changelog": "150ms settle delay added before WiFi teardown in powerDownPeripherals() Brownout recovery now treated as stealth wake"
+  "changelog": "ntfy: Boot#41 (reset#34 +7) — self-explanatory even mid-incident
+MQTT: new reset_count field pairs with the sleep_wakes field that was already there but unpaired
+web dashboard: hover tooltip on the footer's Boot# (zero-cost, doesn't clutter the compact layout)"
 }
