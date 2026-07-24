@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.54
+ * Version:       5.55
  * Last Updated:  2026-07-24
  * License:       MIT
  *
@@ -29,6 +29,46 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.55 — 2026-07-24
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: Unattended OTA install, two ways to trigger it:
+ *         1. Remote request — this firmware was publish-only until now.
+ *            Added the first inbound MQTT subscription: a RETAINED message
+ *            on "<mqtt_topic>/ota/request" (payload "1"/"true"/"on").
+ *            Retained delivery means it doesn't matter the device is asleep
+ *            when the message is published — the broker holds it and
+ *            delivers it the moment this device next connects (worst case
+ *            one sleep interval later, not instant — the radio is fully off
+ *            during deep sleep and cannot be woken by an incoming packet).
+ *            Intended to be set by an ntfy "http" action button on the
+ *            update-available notification, hitting the broker's HTTP API.
+ *         2. New "Auto-install updates when found" checkbox in Settings ->
+ *            OTA Updates (persisted, "ota"/"auto_update"). When on, any
+ *            wake that confirms an update is available installs it
+ *            immediately with no confirmation step.
+ *         Both paths share handleOtaAutoOrRequested(), called from loop()
+ *         right after the existing periodic manifest check: stays awake
+ *         through the install and for ~5 min after (skips stealth-mode
+ *         short-flush for that cycle) so progress/result is visible on the
+ *         OLED and web UI before the device sleeps again, matching the
+ *         existing manual-install UX. A request with no update actually
+ *         available clears the retained flag and sends an ntfy note instead
+ *         of silently doing nothing. An install that fails leaves
+ *         otaUpdateAvailable set for retry on the next wake and sends an
+ *         ntfy alert rather than failing silently.
+ *  - FIX (latent, caught while building the above): otaDownloadUrl/
+ *         otaCrc32Expected/otaFileSize are plain globals, not RTC-persisted
+ *         — only rtcOtaAvailable survives deep sleep. On the (common) wakes
+ *         where the 24h interval guard skips a live manifest re-fetch,
+ *         otaUpdateAvailable correctly restores to true from RTC but the
+ *         URL/CRC/size needed to actually install were empty. Unattended
+ *         install now force-refetches the manifest in that specific
+ *         situation before deciding there's nothing to do. This gap existed
+ *         for manual installs too in principle, but a person looking at the
+ *         dashboard triggers a check as part of loading the page, so it was
+ *         never actually hit there.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.54 — 2026-07-24
@@ -251,7 +291,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.54"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.55"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -275,6 +315,10 @@ static const char FW_VER_MARKER[] = "FW_VER:" FW_VERSION;
 bool     otaUpdateAvailable = false;
 bool     otaCheckDone       = false;   // set after first check this wake
 bool     otaDismissed       = false;   // user clicked Dismiss on dashboard
+// v5.55: unattended install support
+bool     otaAutoUpdate         = false;   // persisted setting — install without asking
+bool     otaRequestedViaMqtt   = false;   // set by /ota/request retained MQTT message this wake
+bool     otaInstallAttemptedThisWake = false;  // guard — only try once per wake either way
 static bool     uploadRejected      = false;   // set on any pre-flash check failure
 static String   uploadRejectReason  = "";
 static bool     uploadMarkerFound   = false;   // FW_VER: marker seen in binary
@@ -868,6 +912,20 @@ void saveNtfyConfig() {
   preferences.putFloat ("t_lo",       sensorTempLo);
   preferences.putFloat ("h_hi",       sensorHumHi);
   preferences.putFloat ("h_lo",       sensorHumLo);
+  preferences.end();
+}
+
+// Load OTA auto-update setting from "ota" namespace (shared with last_chk/updated/prev_ver keys)
+void loadOtaConfig() {
+  preferences.begin("ota", true);
+  otaAutoUpdate = preferences.getBool("auto_update", false);
+  preferences.end();
+}
+
+// Save OTA auto-update setting
+void saveOtaConfig() {
+  preferences.begin("ota", false);
+  preferences.putBool("auto_update", otaAutoUpdate);
   preferences.end();
 }
 
@@ -2016,12 +2074,40 @@ void checkWiFi() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// MQTT INCOMING MESSAGE CALLBACK  (v5.55)
+// ═════════════════════════════════════════════════════════════════════════════
+// This firmware was publish-only prior to v5.55. This callback + the
+// subscribe call in reconnectMQTT() below add exactly one inbound topic:
+// "<mqtt_topic>/ota/request", a RETAINED message set externally (e.g. an
+// ntfy action button hitting the broker's HTTP API) requesting an
+// unattended OTA install. Retained delivery means it doesn't matter that
+// the device is asleep when the button is pressed -- the broker holds the
+// message and delivers it the moment this device next connects, which
+// happens every wake regardless of stealth/active mode (worst case ~deep
+// sleep interval later, not instant).
+void mqttMessageReceived(char* topic, byte* payload, unsigned int length) {
+  String t = String(topic);
+  if (t != (mqtt_topic + "/ota/request")) return;
+
+  String val; val.reserve(length);
+  for (unsigned int i = 0; i < length; i++) val += (char)payload[i];
+  val.trim();
+
+  bool truthy = val.equalsIgnoreCase("1") || val.equalsIgnoreCase("true") || val.equalsIgnoreCase("on");
+  if (truthy) {
+    otaRequestedViaMqtt = true;
+    Serial.println(F("[MQTT] OTA install requested via retained message"));
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // MQTT CLIENTS SETUP
 // ═════════════════════════════════════════════════════════════════════════════
 void setupMQTTClients() {
   mqttStd.setBufferSize(MQTT_BUFFER_SIZE); mqttStd.setKeepAlive(MQTT_KEEPALIVE);
   mqttAIO.setBufferSize(MQTT_BUFFER_SIZE); mqttAIO.setKeepAlive(MQTT_KEEPALIVE);
   mqttUBI.setBufferSize(MQTT_BUFFER_SIZE); mqttUBI.setKeepAlive(MQTT_KEEPALIVE);
+  mqttStd.setCallback(mqttMessageReceived);   // standard platform only — the one we subscribe on
 }
 
 // Connects a single PubSubClient; returns true on success
@@ -2048,6 +2134,7 @@ void reconnectMQTT() {
       if (connectMQTT(mqttStd, mqtt_server, mqtt_port.toInt(), mqtt_user, mqtt_pass, id)) {
         mqttStandardConnected = true; stdRetries = 0; lastRead = 0;
         mqttStd.publish((mqtt_topic + "/status").c_str(), "awake");
+        mqttStd.subscribe((mqtt_topic + "/ota/request").c_str());
         Serial.println("OK");
       } else { stdRetries++; lastStandardRetry = now; Serial.println("fail " + String(stdRetries)); }
     }
@@ -3117,6 +3204,87 @@ bool installOtaFromUrl(const String& url, const String& expectedCrc32, uint32_t 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// handleOtaAutoOrRequested() — v5.55
+// Called once per loop() iteration, after checkOtaManifest(). Covers two
+// unattended-install triggers that share the same install/report logic:
+//   1. otaRequestedViaMqtt  — a retained "<topic>/ota/request" message was
+//      received this wake (see mqttMessageReceived()).
+//   2. otaAutoUpdate        — the persisted "always auto-install" setting is
+//      on and a check this wake found a newer version.
+// Guarded by otaInstallAttemptedThisWake so it only ever fires once per wake
+// regardless of how many loop() iterations run before the sleep trigger.
+// ─────────────────────────────────────────────────────────────────────────────
+void handleOtaAutoOrRequested() {
+  if (otaInstallAttemptedThisWake) return;
+  if (!otaCheckDone) return;   // wait until this wake's manifest check has actually run
+
+  bool shouldInstall = otaRequestedViaMqtt || (otaAutoUpdate && otaUpdateAvailable);
+  if (!shouldInstall) return;
+
+  // otaDownloadUrl/CRC/size are plain globals, NOT RTC-persisted — on most
+  // wakes the 24h interval guard skips the live manifest fetch entirely and
+  // only otaUpdateAvailable gets restored (from RTC). If we know an update
+  // exists but don't have the URL populated this wake, force one fresh fetch
+  // now rather than treating "URL empty" as "nothing to install".
+  if (otaUpdateAvailable && otaDownloadUrl.length() == 0) {
+    Serial.println(F("[OTA] Update known but URL not cached this wake — re-fetching manifest"));
+    checkOtaManifest(true);
+  }
+
+  if (!otaUpdateAvailable || otaDownloadUrl.length() == 0) {
+    // MQTT asked for an install but none is actually available right now —
+    // clear the retained flag and say so, rather than silently doing nothing
+    // and leaving the button-presser wondering if it worked.
+    if (otaRequestedViaMqtt) {
+      otaInstallAttemptedThisWake = true;
+      mqttStd.publish((mqtt_topic + "/ota/request").c_str(), "", true);  // clear retained
+      otaRequestedViaMqtt = false;
+      if (ntfy_enabled && ntfy_topic.length()) {
+        sendNtfy("Update: " + device_name,
+                 "An install was requested but no update is currently available.",
+                 1, "information_source");
+      }
+    }
+    return;
+  }
+
+  otaInstallAttemptedThisWake = true;
+
+  // Stay awake through the install and for a few minutes after, so a stealth
+  // cycle doesn't sleep mid-download or immediately re-sleep before there's
+  // been a chance to confirm the result on the web UI / OLED.
+  stealthThisWake = false;
+  disableDeepSleepUntil = millis() + 5UL * 60UL * 1000UL;
+
+  Serial.println(otaRequestedViaMqtt ? F("[OTA] Installing — requested via MQTT")
+                                      : F("[OTA] Installing — auto-update enabled"));
+
+  bool ok = installOtaFromUrl(otaDownloadUrl, otaCrc32Expected, otaFileSize);
+
+  if (otaRequestedViaMqtt) {
+    mqttStd.publish((mqtt_topic + "/ota/request").c_str(), "", true);  // clear retained either way
+    otaRequestedViaMqtt = false;
+  }
+
+  if (ok) {
+    preferences.begin("ota", false);
+    preferences.putBool  ("updated",  true);
+    preferences.putString("prev_ver", FW_VERSION);
+    preferences.end();
+    Serial.println(F("[OTA] Unattended install complete — rebooting"));
+    delay(500);
+    ESP.restart();
+  } else {
+    Serial.println(F("[OTA] Unattended install FAILED — otaUpdateAvailable left true for retry"));
+    if (ntfy_enabled && ntfy_topic.length()) {
+      sendNtfy("Update FAILED: " + device_name,
+               "Automatic install of v" + otaNewVersion + " failed. Check Serial log or web UI.",
+               2, "warning");
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // showOtaBootSplash() — called once in setup() when NVS "ota/updated" is set.
 // Shows a temporary OLED frame: "FIRMWARE UPDATED / vX.XX → vY.YY / Boot#N"
 // for ~8 s, then returns so normal setup continues. Clears the NVS flag.
@@ -4063,6 +4231,16 @@ void setupOTA() {
     }
     h += F("</select></div>");
 
+    // ── OTA Updates ─────────────────────────────────────────────────────────
+    h += F("<div class='sec'><h2>&#x1F680; OTA Updates</h2>"
+      "<div class='info'>Manifest is checked at most once per 24h, on whatever "
+      "wake happens next — see the dashboard banner or /ota_check to install "
+      "manually at any time.</div>"
+      "<label class='cb'><input type='checkbox' name='ota_auto'");
+    if (otaAutoUpdate) h += F(" checked");
+    h += F("> Auto-install updates when found (no confirmation — device stays "
+      "awake ~5 min to apply and report)</label></div>");
+
     // ── Display Care ──────────────────────────────────────────────────────────
     h += F("<div class='sec'><h2>&#x1F4FA; Display Care</h2>"
       "<div class='info'>Exercises all pixels to counteract OLED burn-in. "
@@ -4198,6 +4376,8 @@ void setupOTA() {
     ps_wifi=server.hasArg("ps_wifi"); ps_bt  =server.hasArg("ps_bt");
     ps_vext=server.hasArg("ps_vext"); ps_oled=server.hasArg("ps_oled");
     ps_dht =server.hasArg("ps_dht");  ps_cpu =server.hasArg("ps_cpu");
+    otaAutoUpdate = server.hasArg("ota_auto");
+    saveOtaConfig();
     if(server.hasArg("ps_cpu_wake_mhz")){
       uint32_t mhz=(uint32_t)server.arg("ps_cpu_wake_mhz").toInt();
       if(mhz==80||mhz==160||mhz==240){ps_cpu_wake_mhz=mhz;setCpuFrequencyMhz(mhz);}
@@ -4849,6 +5029,7 @@ void setup() {
 
   // ── ntfy config ──────────────────────────────────────────────────────────────
   loadNtfyConfig();
+  loadOtaConfig();
  
 
   // ── Double reset check — BEFORE WiFiManager ────────────────────────────────
@@ -5513,6 +5694,7 @@ void loop() {
   // ── GitHub OTA manifest check (periodic, non-blocking) ─────────────────────
   // Only runs if interval has elapsed — safe to call every loop iteration.
   if (wifiConnected) checkOtaManifest(false);
+  if (wifiConnected) handleOtaAutoOrRequested();
 
   // ── Web server ─────────────────────────────────────────────────────────────
   server.handleClient();
