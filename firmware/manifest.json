@@ -1,8 +1,8 @@
 {
   "version": "5.59",
   "build_date": "2026-07-25",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.58/heltec_wifkit32v2_v558_345B2CD8_firmware.ino.bin",
-  "size": 1425.5,
-  "crc32": "345B2CD8",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.59/heltec_wifkit32v2_v559_5C18741E_firmware.ino.bin",
+  "size": 1428.1,
+  "crc32": "5C18741E",
   "changelog": "new persistent dashboard banner, plus a finding,checkNow() was fetching d.available/d.size correctly but never writing them into #nv/#fsz,Added a Validate manifest.json step immediately after checkout"
 }
