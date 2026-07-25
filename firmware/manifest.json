@@ -1,8 +1,8 @@
 {
   "version": "5.58",
   "build_date": "2026-07-25",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.57/heltec_wifkit32v2_v557_4A6B778D_firmware.ino.bin",
-  "size": 1425.4,
-  "crc32": "4A6B778D",
-  "changelog": "Auto-install-on-check — real bug, fixed.Via: unknown — not actually a bug"
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.58/heltec_wifkit32v2_v558_345B2CD8_firmware.ino.bin",
+  "size": 1425.5,
+  "crc32": "345B2CD8",
+  "changelog": "Auto-install-on-check \u2014 real bug, fixed.Via: unknown \u2014 not actually a bug"
 }
