@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.58
+ * Version:       5.59
  * Last Updated:  2026-07-25
  * License:       MIT
  *
@@ -29,6 +29,33 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.59 — 2026-07-25
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: /update page's top summary card (Current/New Version, File Size)
+ *         fetched manifest data via checkNow() but never wrote it back into
+ *         the #nv/#fsz elements — stayed stuck on "—" placeholders even
+ *         once the green "GitHub release" card below was showing a real
+ *         update. Also resets to "up to date" on a check that finds
+ *         nothing, so repeated Check Now clicks don't leave stale data.
+ *  - NEW: persistent "auto-updated while you were away" dashboard banner.
+ *         The ntfy confirmation + one-shot OLED splash (already existing)
+ *         both fire immediately after install, easy to miss for an
+ *         overnight unattended (auto/mqtt-triggered) update. This new
+ *         banner is written to NVS at install time (auto/mqtt paths only —
+ *         manual web/upload installs don't need it, the person's already
+ *         watching those happen live) and persists across as many wake
+ *         cycles as it takes until someone actually loads the dashboard —
+ *         unlike the "updated" flag, which is consumed on the very next
+ *         boot regardless of whether a human saw it. Shows from/to version,
+ *         trigger (auto-update vs remote request), and relative time since
+ *         install. New /ota_update_ack endpoint clears it once seen.
+ *         (OLED note: already covers the immediate case without any change
+ *         needed — ESP.restart() after any successful install produces a
+ *         software reset reason, which stealthThisWake's computation
+ *         always treats as non-stealth, so showOtaBootSplash() already
+ *         runs on the very next boot after ANY install, auto or manual.)
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.58 — 2026-07-25
@@ -363,7 +390,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.58"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.59"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -398,6 +425,14 @@ bool     otaInstallAttemptedThisWake = false;  // guard — only try once per wa
 // actively reviewing the changelog on the dashboard never has an install
 // happen out from under them just because the checkbox happens to be on.
 bool     otaManualCheckThisWake      = false;
+// v5.59: persistent web-dashboard breadcrumb — survives until a person
+// actually loads the dashboard, unlike the one-shot "updated" NVS flag
+// which is consumed on the very next boot regardless of whether anyone saw
+// the ntfy/OLED confirmation (the common case for an overnight auto-update).
+bool     otaWebPending = false;
+String   otaWebFrom    = "";
+String   otaWebVia     = "";
+uint32_t otaWebEpoch   = 0;
 static bool     uploadRejected      = false;   // set on any pre-flash check failure
 static String   uploadRejectReason  = "";
 static bool     uploadMarkerFound   = false;   // FW_VER: marker seen in binary
@@ -998,6 +1033,10 @@ void saveNtfyConfig() {
 void loadOtaConfig() {
   preferences.begin("ota", true);
   otaAutoUpdate = preferences.getBool("auto_update", false);
+  otaWebPending = preferences.getBool  ("web_pend", false);
+  otaWebFrom    = preferences.getString("web_from", "");
+  otaWebVia     = preferences.getString("web_via",  "");
+  otaWebEpoch   = preferences.getUInt  ("web_ep",   0);
   preferences.end();
 }
 
@@ -2776,6 +2815,12 @@ function checkNow(){
   fetch('/ota_check').then(r=>r.json()).then(function(d){
     if(d.update_available){
       el.innerHTML='<span style="color:#4db6ac">&#x2705; v'+d.available+' available &mdash; see below</span>';
+      // v5.59: summary card at the top (Current / New / File Size) was
+      // fetching this same data but never writing it into #nv / #fsz —
+      // stayed stuck on the "—" placeholder even once a real update was
+      // found and shown in the green card below.
+      document.getElementById('nv').textContent = 'v' + d.available;
+      document.getElementById('fsz').textContent = (d.size > 0) ? (d.size/1024).toFixed(1) + ' KB' : '—';
       // Grab current file CRC for comparison
       var fcrcEl=document.getElementById('fcrc');
       var fileCrcVal=fcrcEl?fcrcEl.textContent:'';
@@ -2806,6 +2851,8 @@ function checkNow(){
         +'</div>';
       ib.style.display='block';
     } else {
+      document.getElementById('nv').textContent = 'up to date';
+      document.getElementById('fsz').textContent = '—';
       var crcMismatch = d.crc32.length===8 && d.running_crc32.length===8
                         && d.crc32.toUpperCase() !== d.running_crc32.toUpperCase();
       if (crcMismatch) {
@@ -3374,6 +3421,13 @@ void handleOtaAutoOrRequested() {
     preferences.putString("via",      triggerVia);
     preferences.putString("crc",      otaCrc32Expected);
     preferences.putUInt  ("kb",       otaFileSize / 1024);
+    // v5.59: web dashboard breadcrumb — only for unattended installs (this
+    // path), not the manual web/upload paths, where the person is already
+    // watching it happen live and doesn't need a "while you were away" note.
+    preferences.putBool  ("web_pend", true);
+    preferences.putString("web_from", FW_VERSION);   // still the OLD version at this point, pre-reboot
+    preferences.putString("web_via",  triggerVia);
+    preferences.putUInt  ("web_ep",   ntpSynced ? (uint32_t)time(nullptr) : 0);
     preferences.end();
     Serial.println(F("[OTA] Unattended install complete — rebooting"));
     delay(500);
@@ -3513,6 +3567,43 @@ void setupOTA() {
         "<a href='/ota_dismiss' style='"
         "color:#546e7a;font-size:12px;padding:8px 6px;text-decoration:none'>"
         "Dismiss</a>"
+        "</div></div></div>");
+    }
+
+    // ── Post-update breadcrumb banner (TOP of dashboard) — v5.59 ────────────
+    // The ntfy confirmation + one-shot OLED splash both fire immediately
+    // after an install, which is easy to miss entirely for an unattended
+    // (auto/mqtt-triggered) update that happens overnight. This persists
+    // in NVS — unlike the one-shot "updated" flag consumed on the very
+    // next boot — until a person actually loads the dashboard and sees it,
+    // however many wake cycles later that ends up being.
+    if (otaWebPending) {
+      h += F("<div style='"
+        "background:#1a331a;border:2px solid #66bb6a;border-radius:10px;"
+        "padding:14px 18px;margin-bottom:16px;"
+        "display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap'>"
+        "<span style='font-size:26px;flex-shrink:0'>&#x2705;</span>"
+        "<div style='flex:1;min-width:180px'>"
+        "<div style='color:#66bb6a;font-weight:700;font-size:16px;margin-bottom:4px'>"
+        "Auto-updated to v");
+      h += FW_VERSION;
+      h += F(" while you were away</div>"
+        "<div style='color:#a5d6a7;font-size:13px'>Was v");
+      h += otaWebFrom;
+      h += F(" &middot; via ");
+      h += (otaWebVia == "mqtt") ? F("remote request") : F("auto-update");
+      if (ntpSynced && otaWebEpoch > 0) {
+        uint32_t elapsedS = (uint32_t)time(nullptr) - otaWebEpoch;
+        h += F(" &middot; ");
+        if (elapsedS < 3600)      { h += String(elapsedS / 60); h += F(" min ago"); }
+        else if (elapsedS < 86400){ h += String(elapsedS / 3600); h += F("h ago"); }
+        else                      { h += String(elapsedS / 86400); h += F("d ago"); }
+      }
+      h += F("</div>"
+        "<div style='margin-top:10px'>"
+        "<a href='/ota_update_ack' style='"
+        "background:#37474f;color:#e0e0e0;padding:8px 16px;border-radius:6px;"
+        "font-weight:600;font-size:13px;text-decoration:none'>Got it</a>"
         "</div></div></div>");
     }
 
@@ -4691,6 +4782,18 @@ void setupOTA() {
   // ── /ota_dismiss — user dismissed the update banner ───────────────────────
   server.on("/ota_dismiss", HTTP_GET, []() {
     otaDismissed = true;
+    server.sendHeader("Location", "/"); server.send(302, "text/plain", "");
+  });
+
+  // ── /ota_update_ack — clear the persistent "auto-updated while away"
+  // breadcrumb once the person has actually seen it. Unlike /ota_dismiss
+  // (in-memory only, naturally resets next boot), this writes to NVS since
+  // the whole point of this flag is surviving many reboots until viewed.
+  server.on("/ota_update_ack", HTTP_GET, []() {
+    otaWebPending = false;
+    preferences.begin("ota", false);
+    preferences.putBool("web_pend", false);
+    preferences.end();
     server.sendHeader("Location", "/"); server.send(302, "text/plain", "");
   });
 

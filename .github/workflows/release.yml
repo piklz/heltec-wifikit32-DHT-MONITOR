@@ -39,6 +39,30 @@ jobs:
         with:
           fetch-depth: 0 # Ensures proper history tracking for committing updates back
 
+      # v2 (2026-07-25): catches exactly the failure seen this session — a
+      # hand-edit to manifest.json (usually an unescaped " in the changelog
+      # text) left it invalid JSON, which wasn't caught until the "Update
+      # Manifest" step ~10+ minutes into the run, after a full compile had
+      # already completed. This validates BEFORE any build work starts, so
+      # a bad manifest fails in seconds with a clear message instead of
+      # burning a full build first. Does not touch the compile/build steps
+      # below at all — purely an early guard rail.
+      - name: Validate manifest.json
+        run: |
+          python3 -c "
+          import json, sys
+          path = 'firmware/manifest.json'
+          try:
+              with open(path) as f:
+                  json.load(f)
+              print(f'{path} is valid JSON.')
+          except json.JSONDecodeError as e:
+              print(f'::error::{path} is not valid JSON: {e}')
+              print('Tip: a manual edit likely left an unescaped \" or a raw newline inside a string value (e.g. the changelog field).')
+              print('Prefer editing via workflow_dispatch -> manual_changelog instead of hand-editing the file directly -- that path escapes it for you.')
+              sys.exit(1)
+          "
+
       - name: Setup Arduino CLI
         uses: arduino/setup-arduino-cli@v2
         with:
