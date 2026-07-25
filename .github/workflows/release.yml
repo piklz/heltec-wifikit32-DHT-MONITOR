@@ -63,6 +63,51 @@ jobs:
               sys.exit(1)
           "
 
+      # Nothing anywhere previously cross-checked that manifest.json's target
+      # version actually matches the .ino's compiled-in FW_VERSION. If they
+      # drift (e.g. manifest bumped to 5.60 but FW_VERSION left at 5.59), the
+      # released binary reports 5.59 internally forever, while the manifest
+      # keeps claiming 5.60 -- devices see otaNewVersion never equal their own
+      # FW_VERSION even right after a "successful" update, and can loop
+      # thinking an update is perpetually available. Uses manual_version if
+      # this run was triggered with one (workflow_dispatch), matching exactly
+      # what the later "Update Manifest" step will actually write.
+      - name: Verify FW_VERSION matches manifest target version
+        env:
+          MANUAL_VERSION: ${{ github.event.inputs.manual_version }}
+        run: |
+          python3 -c "
+          import json, re, os, sys
+
+          with open('firmware/manifest.json') as f:
+              data = json.load(f)
+
+          manual_version = os.environ.get('MANUAL_VERSION', '').strip()
+          target_version = manual_version if manual_version else data.get('version', '')
+
+          ino_files = [l for l in os.popen('find . -name \"*.ino\"').read().splitlines()]
+          if not ino_files:
+              print('::error::No .ino file found in repo.')
+              sys.exit(1)
+          with open(ino_files[0]) as f:
+              ino_src = f.read()
+
+          m = re.search(r'#define\s+FW_VERSION\s+\"([\d.]+)\"', ino_src)
+          if not m:
+              print(f'::error::Could not find FW_VERSION define in {ino_files[0]}')
+              sys.exit(1)
+          fw_version = m.group(1)
+
+          print(f'Target manifest version : {target_version}')
+          print(f'.ino FW_VERSION         : {fw_version}')
+
+          if target_version != fw_version:
+              print(f'::error::Version mismatch -- manifest will say v{target_version} but the .ino compiles as v{fw_version}. Bump FW_VERSION in the .ino (and push) to match before releasing.')
+              sys.exit(1)
+
+          print('Versions match.')
+          "
+
       - name: Setup Arduino CLI
         uses: arduino/setup-arduino-cli@v2
         with:
@@ -133,9 +178,12 @@ jobs:
           # 2. Grab the actual binary output and calculate its true CRC32 checksum
           TARGET_BIN=$(ls ./build/*.bin | grep -v "bootloader" | grep -v "partitions" | head -n 1)
           
-          # Calculate size in KB (bytes / 1024) rounded to 1 decimal place
+          # Compute size in bytes (what manifest.json / the firmware expect —
+          # see the .ino's own manifest-format comment: "size":1048576) and
+          # a KB value purely for readability in this step's own log output.
           SIZE_BYTES=$(stat -c%s "$TARGET_BIN")
           SIZE_KB=$(python3 -c "print(round($SIZE_BYTES / 1024, 1))")
+          echo "Binary size: $SIZE_BYTES bytes (~${SIZE_KB} KB)"
           
           # Compute CRC32
           CRC32=$(python3 -c "import zlib; print(f'{zlib.crc32(open(\"$TARGET_BIN\", \"rb\").read()):08X}')")
@@ -148,7 +196,7 @@ jobs:
           # 4. Export context parameters to the local environment context for Python injection
           export D_VERSION="$VERSION"
           export D_NAME="$NEW_NAME"
-          export D_SIZE="$SIZE_KB"
+          export D_SIZE_BYTES="$SIZE_BYTES"
           export D_CRC32="$CRC32"
           export D_CHANGELOG="$MANUAL_CHANGELOG"
           
@@ -164,7 +212,13 @@ jobs:
           data['version'] = os.environ['D_VERSION']
           data['build_date'] = datetime.now(timezone.utc).strftime('%Y-%m-%d')
           data['binary'] = f'https://github.com/' + os.environ['GITHUB_REPO'] + f'/releases/download/v' + os.environ['D_VERSION'] + '/' + os.environ['D_NAME']
-          data['size'] = float(os.environ['D_SIZE'])
+          # v2 (2026-07-25): was writing KB as a float ('size': 1420.5) — the
+          # firmware's own manifest-format comment documents this field as
+          # raw bytes ('size':1048576), and doc[\"size\"] | (uint32_t)0 in
+          # ArduinoJson can't coerce a JSON float into the requested uint32_t,
+          # so it silently fell back to the 0 default. Every device that
+          # parsed a manifest written the old way saw \"Size: 0KB\".
+          data['size'] = int(os.environ['D_SIZE_BYTES'])
           data['crc32'] = os.environ['D_CRC32']
           
           # Update the changelog block if text was inputted manually
