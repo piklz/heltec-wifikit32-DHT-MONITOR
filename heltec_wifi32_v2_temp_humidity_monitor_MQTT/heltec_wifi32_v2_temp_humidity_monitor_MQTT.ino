@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.59
+ * Version:       5.60
  * Last Updated:  2026-07-25
  * License:       MIT
  *
@@ -29,6 +29,34 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.60 — 2026-07-25
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: Display Care pixel-exercise patterns can now be previewed without
+ *         saving — 4 new "Preview" links (one per pattern), each running an
+ *         8s preview via /screen_clean_preview?p=N, mirroring the OLED
+ *         screensaver's existing preview pattern exactly. Saved
+ *         screenCleanPreset/screenCleanDuration are backed up and restored
+ *         automatically, whether the preview ends naturally or is cancelled
+ *         early via the existing /screen_cancel.
+ *  - NEW: "Stay Awake +5 min" button on the dashboard header (every page
+ *         load). Confirmed the suspected page-refresh issue: a comment on
+ *         the "/" handler shows page loads deliberately do NOT extend the
+ *         awake window on their own (a past bug where refreshing always
+ *         reset it to a flat 10 min was fixed on purpose) — so a refresh
+ *         alone was never the cause of early sleep. New /stay_awake adds
+ *         5 min ON TOP of whatever's currently remaining (never resets to
+ *         a flat value), so repeated clicks genuinely stack.
+ *  - FIX: real bug behind the "goes to sleep early" report — /screen_clean,
+ *         /ssaver_preview, and the OTA-install window all set
+ *         disableDeepSleepUntil via a blind overwrite with their own
+ *         (often short) duration. Clicking a screensaver/pixel-exercise
+ *         preview mid-session could OVERWRITE a longer window already
+ *         active (e.g. 8 min left from a recent settings save) with just
+ *         20s or so — a real shortening, not a refresh side effect. All
+ *         three now use max(existing, new) so none of them can ever
+ *         shorten a longer window already running.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.59 — 2026-07-25
@@ -390,7 +418,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.59"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.60"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -697,6 +725,14 @@ unsigned long screenCleanUntil    = 0;
 unsigned long screenCleanToggle   = 0;
 uint16_t      screenCleanDuration = 60;
 uint8_t       screenCleanPreset   = 0;  // 0=Checkerboard 1=InvertRamp 2=Scanline
+// v5.60: preview-without-saving, mirroring ssaverPreview/ssaverSavedPreset below
+bool          screenCleanPreview     = false;  // true only during an explicit preview
+uint8_t       screenCleanSavedPreset = 0;      // preset stored before a preview overrides it
+uint16_t      screenCleanSavedDuration = 60;   // duration stored before a preview overrides it —
+                                                // needed because the pattern-animation code derives
+                                                // phase timing from screenCleanDuration; a preview
+                                                // must temporarily override that too, not just the
+                                                // preset, or the elapsed-time math below goes wrong
 bool     scrollPaused      = false;  // toggled by 3-click
 int      globalHoldSeconds = 0;      // >0: button hold overlay (countdown to sleep trigger)
 int      globalSleepCountdown = 0;   // >0: imminent-sleep overlay (3..2..1 before sleep)
@@ -3397,7 +3433,10 @@ void handleOtaAutoOrRequested() {
   // cycle doesn't sleep mid-download or immediately re-sleep before there's
   // been a chance to confirm the result on the web UI / OLED.
   stealthThisWake = false;
-  disableDeepSleepUntil = millis() + 5UL * 60UL * 1000UL;
+  // v5.60: never shorten a longer window already active (e.g. a person mid
+  // web-UI session from a recent settings save) — same fix as screen_clean/
+  // ssaver_preview above.
+  disableDeepSleepUntil = max(disableDeepSleepUntil, millis() + 5UL * 60UL * 1000UL);
 
   // Capture trigger source now — otaRequestedViaMqtt gets cleared below,
   // before this reboots, so the flag itself won't survive to tell the
@@ -3522,7 +3561,16 @@ void setupOTA() {
       "HELTEC ESP32 Temp / Humidity MQTT Monitor</a>"
       "<span style='color:#616161;font-size:12px;margin-left:auto'>v");
     h += FW_VERSION;
-    h += F("</span></div>");
+    h += F("</span>"
+      // v5.60: explicit session-extend button — page loads deliberately
+      // don't extend the window on their own (see comment below), so this
+      // is the reliable way to buy more time instead of hoping a refresh
+      // or an unrelated button happens to do it.
+      "<a href='/stay_awake' style='"
+      "background:#37474f;color:#e0e0e0;padding:6px 12px;border-radius:6px;"
+      "font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap'>"
+      "&#x2615; Stay Awake +5 min</a>"
+      "</div>");
 
     // ── OTA update-available banner (TOP of dashboard) ──────────────────────
     // Shown immediately below the header card when a newer FW is confirmed.
@@ -4442,8 +4490,8 @@ void setupOTA() {
     // ── Display Care ──────────────────────────────────────────────────────────
     h += F("<div class='sec'><h2>&#x1F4FA; Display Care</h2>"
       "<div class='info'>Exercises all pixels to counteract OLED burn-in. "
-      "Save settings first to apply your pattern/duration choice, "
-      "then press Run Now.</div>"
+      "Preview any pattern instantly below, or Save Settings first to apply "
+      "your choice, then press Run Now.</div>"
       "<label>Pattern</label>"
       "<select name='scrn_preset'><option value='0'");
     if (screenCleanPreset==0) h+=F(" selected");
@@ -4457,6 +4505,15 @@ void setupOTA() {
          "<option value='3'");
     if (screenCleanPreset==3) h+=F(" selected");
     h+=F(">Full Bright Pulse (all pixels + 1s flash)</option></select>"
+      // v5.60: preview any pattern instantly, no Save Settings needed first —
+      // each link runs an 8s preview of that specific pattern without
+      // touching the saved scrn_preset value at all.
+      "<div style='margin-top:6px;font-size:12px;color:#78909c'>Preview: "
+      "<a href='/screen_clean_preview?p=0' style='color:#4db6ac;margin-right:10px'>Checkerboard</a>"
+      "<a href='/screen_clean_preview?p=1' style='color:#4db6ac;margin-right:10px'>Invert Ramp</a>"
+      "<a href='/screen_clean_preview?p=2' style='color:#4db6ac;margin-right:10px'>Scanline</a>"
+      "<a href='/screen_clean_preview?p=3' style='color:#4db6ac'>Full Bright</a>"
+      "</div>"
       "<label>Duration (seconds)</label>"
       "<div class='row'><input type='number' name='scrn_dur' value='");
     h+=String(screenCleanDuration);
@@ -4626,7 +4683,12 @@ void setupOTA() {
 
   // /screen_clean — start pixel exercise
   server.on("/screen_clean", HTTP_GET, []() {
-    disableDeepSleepUntil = millis() + ((unsigned long)screenCleanDuration + 15) * 1000UL;
+    // v5.60: was a blind overwrite — could SHORTEN a longer window already
+    // in effect (e.g. from a recent settings save or button wake) rather
+    // than only ever extending it. Never let this feature's own window be
+    // shorter than whatever's already running.
+    disableDeepSleepUntil = max(disableDeepSleepUntil,
+                                 millis() + ((unsigned long)screenCleanDuration + 15) * 1000UL);
     screenCleanUntil  = millis() + (unsigned long)screenCleanDuration * 1000UL;
     screenCleanToggle = 0;
     screenCleanActive = true;
@@ -4647,12 +4709,53 @@ void setupOTA() {
   // /screen_cancel — abort pixel exercise immediately
   server.on("/screen_cancel", HTTP_GET, []() {
     screenCleanActive = false;
+    if (screenCleanPreview) {           // restore saved preset/duration if cancelled mid-preview
+      screenCleanPreset   = screenCleanSavedPreset;
+      screenCleanDuration = screenCleanSavedDuration;
+      screenCleanPreview  = false;
+    }
     display.normalDisplay();
     display.clear();
     display.displayOn();
     Serial.println(F("[OLED] Pixel exercise cancelled"));
     server.send(200, F("text/html"),
       actionPage("&#x2714;", "Exercise Cancelled", "Display restored.", 3));
+  });
+
+  // /screen_clean_preview — v5.60: preview any pattern without saving,
+  // mirroring /ssaver_preview exactly. screenCleanSavedPreset backs up the
+  // real saved setting; screenCleanPreset is temporarily overridden for the
+  // preview only and restored automatically when it ends (see the
+  // screenCleanActive expiry block further down) or if cancelled early via
+  // /screen_cancel above. Fixed ~8s preview length regardless of the
+  // configured screenCleanDuration, matching the screensaver preview's
+  // "just show me quickly" feel rather than running the full real duration.
+  server.on("/screen_clean_preview", HTTP_GET, []() {
+    uint8_t p = screenCleanPreset;  // default to saved
+    if (server.hasArg("p")) {
+      int pv = server.arg("p").toInt();
+      if (pv >= 0 && pv <= 3) p = (uint8_t)pv;
+    }
+
+    screenCleanSavedPreset   = screenCleanPreset;
+    screenCleanSavedDuration = screenCleanDuration;
+    screenCleanPreset        = p;
+    screenCleanDuration      = 8;   // short fixed preview length — see global comment
+    screenCleanPreview       = true;
+    screenCleanToggle        = 0;
+    screenCleanActive        = true;
+    screenCleanUntil         = millis() + 8000UL;
+    display.normalDisplay();
+    display.displayOn();
+
+    // Never shorten a longer window already active (e.g. mid admin session)
+    disableDeepSleepUntil = max(disableDeepSleepUntil, millis() + 15000UL);
+
+    const char* names[] = {"Checkerboard Shift","Invert Ramp","Scanline Sweep","Full Bright Pulse"};
+    Serial.printf("[OLED] Preview: %s\n", names[min((int)p,3)]);
+    server.send(200, F("text/html"),
+      actionPage("&#x2728;", "Preview Started",
+        String(names[min((int)p,3)]) + " &mdash; 8s preview. Not saved.", 9));
   });
 
   // /ssaver_preview — force start current or selected preset
@@ -4676,7 +4779,8 @@ void setupOTA() {
 
     display.displayOn();
     display.clear();
-    disableDeepSleepUntil = millis() + 20000UL;
+    // v5.60: same fix as /screen_clean — never shorten an already-longer window
+    disableDeepSleepUntil = max(disableDeepSleepUntil, millis() + 20000UL);
 
     const char* names[] = { "Bouncing Ball", "Mario Bounce", "Matrix Rain", "DVD Logo" };
     Serial.printf("[SAVER] Preview started: %s\n", names[p]);
@@ -4782,6 +4886,20 @@ void setupOTA() {
   // ── /ota_dismiss — user dismissed the update banner ───────────────────────
   server.on("/ota_dismiss", HTTP_GET, []() {
     otaDismissed = true;
+    server.sendHeader("Location", "/"); server.send(302, "text/plain", "");
+  });
+
+  // ── /stay_awake — v5.60: explicit "extend session" button, since page
+  // loads deliberately do NOT extend the window on their own (see the
+  // comment on the "/" handler above — that was a past bug, fixed on
+  // purpose, not an oversight). Adds 5 min ON TOP of whatever time is
+  // currently remaining rather than resetting to a flat 5 min — so it
+  // never shortens an existing longer window, and clicking it repeatedly
+  // genuinely stacks rather than capping at 5 min from the moment clicked.
+  server.on("/stay_awake", HTTP_GET, []() {
+    unsigned long base = max(disableDeepSleepUntil, millis());
+    disableDeepSleepUntil = base + 5UL * 60UL * 1000UL;
+    Serial.println(F("[WEB] Stay Awake +5 min"));
     server.sendHeader("Location", "/"); server.send(302, "text/plain", "");
   });
 
@@ -5838,6 +5956,11 @@ void loop() {
     if (millis() > screenCleanUntil) {
       // Cycle complete — normalDisplay() essential to undo any invertDisplay()
       screenCleanActive = false;
+      if (screenCleanPreview) {         // restore saved preset/duration after preview ends naturally
+        screenCleanPreset   = screenCleanSavedPreset;
+        screenCleanDuration = screenCleanSavedDuration;
+        screenCleanPreview  = false;
+      }
       display.normalDisplay();
       display.clear();
       display.displayOn();
