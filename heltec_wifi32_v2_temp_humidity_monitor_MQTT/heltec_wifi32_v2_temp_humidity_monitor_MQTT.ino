@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.57
+ * Version:       5.58
  * Last Updated:  2026-07-25
  * License:       MIT
  *
@@ -29,6 +29,34 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.58 — 2026-07-25
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Clicking "Check for Updates" on the OTA dashboard page (or the
+ *         page's own on-load fetch) could trigger an unattended install if
+ *         the "Auto-install" checkbox happened to be on — /ota_check just
+ *         forces a manifest re-fetch to refresh the banner/changelog, but
+ *         the very next loop() tick's handleOtaAutoOrRequested() saw
+ *         otaUpdateAvailable go true and had no way to tell "background
+ *         check" apart from "person is actively reviewing this on the
+ *         dashboard right now". New otaManualCheckThisWake flag, set the
+ *         moment /ota_check is hit, suppresses the auto-update install path
+ *         for the rest of that wake only (plain global — resets itself on
+ *         the next wake/boot, no explicit clearing needed). The existing
+ *         manual "Install Now" button is completely unaffected — still
+ *         works exactly as before. The MQTT-requested-install path is also
+ *         unaffected, since that's already an explicit "install it"
+ *         instruction from the person, not a passive browse.
+ *  - FIX: "Via: unknown" on the post-update ntfy confirmation wasn't a bug
+ *         in v5.57's logic — it correctly reported that NVS had no via
+ *         value, because the install that produced it was PERFORMED by the
+ *         OLD pre-v5.57 firmware, which had no code to write that field
+ *         yet. One-time artifact of upgrading past v5.57, self-resolving —
+ *         every install performed BY v5.57+ always records a real via
+ *         value. Reworded the fallback to say so explicitly ("n/a
+ *         (installed by pre-tracking firmware)") instead of a bare
+ *         "unknown" that reads like something went wrong.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.57 — 2026-07-25
@@ -335,7 +363,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.57"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.58"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -363,6 +391,13 @@ bool     otaDismissed       = false;   // user clicked Dismiss on dashboard
 bool     otaAutoUpdate         = false;   // persisted setting — install without asking
 bool     otaRequestedViaMqtt   = false;   // set by /ota/request retained MQTT message this wake
 bool     otaInstallAttemptedThisWake = false;  // guard — only try once per wake either way
+// v5.58: set true the moment a person hits /ota_check (button click or the
+// OTA page's own on-load fetch) — a plain global, so it naturally resets to
+// false on the next wake/boot with no explicit clearing needed. Suppresses
+// the auto-update install path for the REST of this wake only, so someone
+// actively reviewing the changelog on the dashboard never has an install
+// happen out from under them just because the checkbox happens to be on.
+bool     otaManualCheckThisWake      = false;
 static bool     uploadRejected      = false;   // set on any pre-flash check failure
 static String   uploadRejectReason  = "";
 static bool     uploadMarkerFound   = false;   // FW_VER: marker seen in binary
@@ -3273,7 +3308,13 @@ void handleOtaAutoOrRequested() {
   if (otaInstallAttemptedThisWake) return;
   if (!otaCheckDone) return;   // wait until this wake's manifest check has actually run
 
-  bool shouldInstall = otaRequestedViaMqtt || (otaAutoUpdate && otaUpdateAvailable);
+  // v5.58: auto-update never fires if a person is actively on the OTA page
+  // this wake (see otaManualCheckThisWake) — checking for updates to read
+  // the changelog should never itself trigger an install. The MQTT-request
+  // path is untouched: that's already an explicit "install it" instruction
+  // from the person, not a passive browse.
+  bool shouldInstall = otaRequestedViaMqtt ||
+                        (otaAutoUpdate && otaUpdateAvailable && !otaManualCheckThisWake);
   if (!shouldInstall) return;
 
   // otaDownloadUrl/CRC/size are plain globals, NOT RTC-persisted — on most
@@ -4584,6 +4625,7 @@ void setupOTA() {
 
   // ── /ota_check — trigger immediate manifest fetch, return JSON status ─────────
   server.on("/ota_check", HTTP_GET, []() {
+  otaManualCheckThisWake = true;   // person is actively viewing the OTA page — see handleOtaAutoOrRequested()
   checkOtaManifest(true);  // force=true bypasses the interval guard
   
   // Build JSON — include build_date so OTA page manifest card is complete
@@ -5287,11 +5329,15 @@ void setup() {
       // "this happened on its own" (auto/mqtt), which matters a lot more
       // for an unattended install than for one you just clicked yourself.
       if (ntfy_enabled && ntfy_on_boot && ntfy_topic.length()) {
+        // "unknown" only ever means the install was PERFORMED by firmware
+        // older than v5.57 (before this field existed to write) -- it's a
+        // one-time artifact of upgrading past that version, not a real
+        // failure. Every v5.57+ install always records a real via value.
         String viaLabel = (otaVia == "auto")          ? "auto-update"
                          : (otaVia == "mqtt")          ? "remote request"
                          : (otaVia == "manual-web")    ? "manual (web, GitHub)"
                          : (otaVia == "manual-upload") ? "manual (file upload)"
-                                                        : "unknown";
+                                                        : "n/a (installed by pre-tracking firmware)";
         char timeBuf[6] = "?";
         if (ntpSynced) {
           struct tm ti; getLocalTime(&ti, 0);
