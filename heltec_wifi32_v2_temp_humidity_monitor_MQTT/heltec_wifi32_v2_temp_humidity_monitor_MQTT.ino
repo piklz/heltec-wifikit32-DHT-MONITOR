@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.55
- * Last Updated:  2026-07-24
+ * Version:       5.56
+ * Last Updated:  2026-07-25
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,27 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.56 — 2026-07-25
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - CLARITY: Reworked the wake/boot ntfy message layout:
+ *         • "Wake: <reason>" line dropped — the ntfy title (e.g.
+ *           "Wake (timer): heltechome_lola") already says this; having it
+ *           twice was redundancy, not a second piece of information.
+ *         • "Boot#41 (reset#35 +6)" math shorthand replaced with a plain
+ *           sentence on its own line: "Boot#41 — 6 wakes since reset #35".
+ *           Previously it sat on the same line as "Reset: <reason>", which
+ *           meant "reset" appeared twice with two different meanings (wake
+ *           reset cause vs. lifetime reset count) — now on separate lines.
+ *         • "On:" relabeled "Uptime:" — clearer, standard terminology for
+ *           what it actually measures (time since last reset).
+ *         • Temp/Hum line now sent bold via ntfy Markdown (X-Markdown
+ *           header), added as a new optional 5th param to sendNtfy()
+ *           (default false — every other call site unaffected, still plain
+ *           text). Only the wake/boot summary opts in.
+ *         • Degree symbol added ("25.6°C" not "25.6C"), matching the OLED
+ *           display's existing formatting.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.55 — 2026-07-24
@@ -291,7 +312,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.55"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.56"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1178,7 +1199,7 @@ void battery_read() {
 // priority — 1=min 2=low 3=default 4=high 5=urgent
 // tags     — comma-separated ntfy tag names e.g. "warning,battery"
 void sendNtfy(const String &title, const String &message,
-              int priority = 3, const String &tags = "") {
+              int priority = 3, const String &tags = "", bool markdown = false) {
   if (!ntfy_enabled || ntfy_topic.length() == 0) return;
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[NTFY] No WiFi (status=" + String(WiFi.status()) + ") — skipping");
@@ -1199,6 +1220,10 @@ void sendNtfy(const String &title, const String &message,
   http.addHeader("Priority", String(priority));
   if (tags.length())       http.addHeader("Tags", tags);
   if (ntfy_token.length()) http.addHeader("Authorization", "Bearer " + ntfy_token);
+  // v5.56: opt-in per-call — only the wake/boot summary sets this true, to
+  // bold the Temp/Hum line. Every other sendNtfy() call site is unaffected
+  // (default false, plain text as before).
+  if (markdown) http.addHeader("Markdown", "true");
 
   int code = http.POST(message);
   http.end();
@@ -2327,15 +2352,22 @@ void publishBootSummary() {
                    :                 "battery";
     String modeStr = (wakeDisplayMode == 0) ? "Stealth" : "Active";
 
-    String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "C" : "--";
+    String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "°C" : "--";
     String hStr = (!isnan(humidity)    && humidity    != 0.0f) ? String(humidity,    1) + "%" : "--";
     String resetStr = lastResetReasonStr + (rtcEpochGlitchThisBoot ? " (RTC glitch?)" : "");
-    String bootStr = String(bootCount) + " (reset#" + String(nvsBootBase) +
-                      (rtcBootOffset > 0 ? " +" + String(rtcBootOffset) : "") + ")";
-    String msg = "Temp: " + tStr + "  Hum: " + hStr + "\n"
+    // v5.56: plain-English breakdown instead of "Boot#41 (reset#35 +6)" math
+    // shorthand — and moved off the Reset: line, since "reset" meant two
+    // different things on that line (wake reset *reason* vs. lifetime reset
+    // *count*). "Wake: <reason>" dropped from the body entirely — the ntfy
+    // title (e.g. "Wake (timer): heltechome_lola") already says this; having
+    // it twice was pure redundancy, not a second piece of information.
+    String bootLine = "Boot#" + String(bootCount) + " — " + String(rtcBootOffset) +
+                       " wake" + (rtcBootOffset == 1 ? "" : "s") + " since reset #" + String(nvsBootBase);
+    String msg = "**Temp: " + tStr + "  Hum: " + hStr + "**\n"
                  "Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
-                 "Wake: " + reason + "  Reset: " + resetStr + "  Mode: " + modeStr + "  Boot#" + bootStr + "\n"
-                 "On: " + getTotalUptime() + "\n"
+                 "Reset: " + resetStr + "  Mode: " + modeStr + "\n"
+                 + bootLine + "\n"
+                 "Uptime: " + getTotalUptime() + "\n"
                  "IP: " + WiFi.localIP().toString() + "  v" + FW_VERSION;
     if (rtcWifiFailStreak > 0) {
       msg += "\nWiFi fails since last report: " + String(rtcWifiFailStreak) +
@@ -2343,7 +2375,7 @@ void publishBootSummary() {
     }
     int est = estSleepsRemaining();
     if (est >= 0) msg += "\n~" + String(est) + " sleeps remaining";
-    sendNtfy(ntfyTitle + ": " + device_name, msg, 2, wakeIcon + "," + srcIcon);
+    sendNtfy(ntfyTitle + ": " + device_name, msg, 2, wakeIcon + "," + srcIcon, true);
   } else {
     if (!ntfy_enabled)                 Serial.println("[NTFY-BOOT] Skipped -- ntfy disabled");
     if (ntfy_enabled && !ntfy_on_boot) Serial.println("[NTFY-BOOT] Skipped -- on_boot disabled");
