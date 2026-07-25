@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.56
+ * Version:       5.57
  * Last Updated:  2026-07-25
  * License:       MIT
  *
@@ -29,6 +29,29 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.57 — 2026-07-25
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX + ENHANCE: the post-OTA "Firmware Updated" ntfy confirmation
+ *         existed already but had a real bug — a missing separator meant
+ *         the version line ran straight into "Boot #" with no space/newline
+ *         ("v5.55 -> v5.56Boot #42..."). Also missing: which of the four
+ *         install paths triggered it, install time, and any build stats.
+ *         Fixed and extended:
+ *         • New "via" field (NVS) — "auto" (checkbox), "mqtt" (remote
+ *           request), "manual-web" (GitHub button), "manual-upload" (raw
+ *           file upload) — persisted at install time by all four install
+ *           call sites, read back on the next boot. Shown as a plain label
+ *           ("auto-update", "remote request", etc.) — matters most for the
+ *           two unattended paths, where confirming *that* an install
+ *           happened matters as much as confirming *what* changed.
+ *         • CRC32 + size (KB) persisted alongside prev_ver for the two
+ *           manifest-based paths (auto/mqtt/manual-web all know these from
+ *           the manifest already fetched; manual-upload has no manifest so
+ *           this is correctly omitted for that path, not faked).
+ *         • Install time (local HH:MM if NTP synced) added.
+ *         • MQTT ota_applied event gains matching via/crc32/size_kb fields.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.56 — 2026-07-25
@@ -312,7 +335,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.56"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.57"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -3288,6 +3311,11 @@ void handleOtaAutoOrRequested() {
   stealthThisWake = false;
   disableDeepSleepUntil = millis() + 5UL * 60UL * 1000UL;
 
+  // Capture trigger source now — otaRequestedViaMqtt gets cleared below,
+  // before this reboots, so the flag itself won't survive to tell the
+  // post-reboot confirmation message which path fired it.
+  String triggerVia = otaRequestedViaMqtt ? "mqtt" : "auto";
+
   Serial.println(otaRequestedViaMqtt ? F("[OTA] Installing — requested via MQTT")
                                       : F("[OTA] Installing — auto-update enabled"));
 
@@ -3302,6 +3330,9 @@ void handleOtaAutoOrRequested() {
     preferences.begin("ota", false);
     preferences.putBool  ("updated",  true);
     preferences.putString("prev_ver", FW_VERSION);
+    preferences.putString("via",      triggerVia);
+    preferences.putString("crc",      otaCrc32Expected);
+    preferences.putUInt  ("kb",       otaFileSize / 1024);
     preferences.end();
     Serial.println(F("[OTA] Unattended install complete — rebooting"));
     delay(500);
@@ -3832,6 +3863,9 @@ void setupOTA() {
         preferences.begin("ota", false);
         preferences.putBool  ("updated",  true);
         preferences.putString("prev_ver", FW_VERSION);
+        preferences.putString("via",      "manual-upload");
+        preferences.putString("crc",      "");   // not applicable — raw file upload, no manifest
+        preferences.putUInt  ("kb",       0);
         preferences.end();
         // Clear update-available flag — it's being applied right now
         rtcOtaAvailable    = false;
@@ -4665,6 +4699,9 @@ void setupOTA() {
       preferences.begin("ota", false);
       preferences.putBool  ("updated",  true);
       preferences.putString("prev_ver", FW_VERSION);
+      preferences.putString("via",      "manual-web");
+      preferences.putString("crc",      otaCrc32Expected);
+      preferences.putUInt  ("kb",       otaFileSize / 1024);
       preferences.end();
       Serial.println(F("[OTA] GitHub install OK — rebooting"));
     } else {
@@ -5210,13 +5247,16 @@ void setup() {
     preferences.begin("ota", false);
     bool justUpdated = preferences.getBool  ("updated",  false);
     String prevVer   = preferences.getString("prev_ver", "");
+    String otaVia    = preferences.getString("via",      "");
+    String otaCrc    = preferences.getString("crc",      "");
+    uint32_t otaKb   = preferences.getUInt  ("kb",       0);
     if (justUpdated) {
       preferences.putBool("updated", false);  // clear — shown only once
     }
     preferences.end();
 
-    Serial.printf("[OTA] Boot check: justUpdated=%d prevVer='%s' FW='%s'\n",
-      justUpdated, prevVer.c_str(), FW_VERSION);
+    Serial.printf("[OTA] Boot check: justUpdated=%d prevVer='%s' FW='%s' via='%s'\n",
+      justUpdated, prevVer.c_str(), FW_VERSION, otaVia.c_str());
 
     if (justUpdated && prevVer.length()) {
       // Clear the runtime OTA-available flag — we just installed it
@@ -5231,15 +5271,40 @@ void setup() {
         ud["device"]    = device_name;
         ud["from"]      = prevVer;
         ud["to"]        = FW_VERSION;
+        ud["via"]       = otaVia;
+        ud["crc32"]     = otaCrc;
+        ud["size_kb"]   = otaKb;
         ud["boot"]      = bootCount;
         String up; serializeJson(ud, up);
         mqttStd.publish((mqtt_topic + "/ota").c_str(), up.c_str());
         mqttStd.loop();
       }
 
-      // ntfy: update-applied notification
+      // ntfy: update-applied notification — v5.56: was missing a separator
+      // between the version line and "Boot #" (ran together with no space),
+      // and had no trigger source, build stats, or install time. "via"
+      // distinguishes "you did this" (manual-web/manual-upload) from
+      // "this happened on its own" (auto/mqtt), which matters a lot more
+      // for an unattended install than for one you just clicked yourself.
       if (ntfy_enabled && ntfy_on_boot && ntfy_topic.length()) {
-        sendNtfy("Firmware Updated: " + device_name,"v" + prevVer + " -> v" + String(FW_VERSION) + "" "Boot #" + String(bootCount) + "  IP: " + WiFi.localIP().toString(), 3, "white_check_mark,rocket");
+        String viaLabel = (otaVia == "auto")          ? "auto-update"
+                         : (otaVia == "mqtt")          ? "remote request"
+                         : (otaVia == "manual-web")    ? "manual (web, GitHub)"
+                         : (otaVia == "manual-upload") ? "manual (file upload)"
+                                                        : "unknown";
+        char timeBuf[6] = "?";
+        if (ntpSynced) {
+          struct tm ti; getLocalTime(&ti, 0);
+          snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", ti.tm_hour, ti.tm_min);
+        }
+        String otaMsg = "v" + prevVer + " \u2192 v" + String(FW_VERSION) + "\n"
+                         "Via: " + viaLabel + "  at " + String(timeBuf) + "\n"
+                         "Boot#" + String(bootCount);
+        if (otaCrc.length()) {
+          otaMsg += "\nCRC32: " + otaCrc + "  Size: " + String(otaKb) + "KB";
+        }
+        otaMsg += "\nIP: " + WiFi.localIP().toString();
+        sendNtfy("Firmware Updated: " + device_name, otaMsg, 3, "white_check_mark,rocket");
       }
     }
   }

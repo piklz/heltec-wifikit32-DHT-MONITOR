@@ -1,8 +1,8 @@
 {
-  "version": "5.56",
+  "version": "5.57",
   "build_date": "2026-07-25",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.56/heltec_wifkit32v2_v556_1E932008_firmware.ino.bin",
   "size": 1424.0,
   "crc32": "1E932008",
-  "changelog": "re-labeling some ntfy output text to be more clear"
+  "changelog": "auto update confirmation notification ntfy added"
 }
