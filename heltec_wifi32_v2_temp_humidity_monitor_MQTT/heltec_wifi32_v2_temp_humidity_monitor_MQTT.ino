@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.60
- * Last Updated:  2026-07-25
+ * Version:       5.61
+ * Last Updated:  2026-07-26
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,43 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.61 — 2026-07-26
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Display Care preview (v5.60) used 4 static per-pattern links —
+ *         didn't scale, and wasn't the same UX as the OLED screensaver's
+ *         existing preview (dropdown + single button reading the current
+ *         selection via JS). Now identical: one "Preview Selected Pattern"
+ *         button, no save needed, scales to any future preset with zero
+ *         new UI.
+ *  - FIX: wake/boot ntfy message's IP stopped being tap-to-open on mobile.
+ *         Root cause: v5.56 turned on ntfy Markdown mode for this message
+ *         (to bold the Temp/Hum line), which suppresses ntfy's plain-text
+ *         auto-link heuristic for a bare IP string. Fixed with an explicit
+ *         markdown link ([ip](http://ip)) instead of relying on that
+ *         heuristic. (The OTA "Firmware Updated" message never used
+ *         markdown mode, which is why its IP stayed clickable the whole
+ *         time — not a regression there.)
+ *  - NEW: trend arrows (▲/▼) on Temp/Hum in the wake/boot message, reusing
+ *         the existing dead-band-filtered trendTemp/trendHumidity used by
+ *         the OLED. Found and fixed a real gap enabling this: temperature/
+ *         humidity are plain (this-boot-only) globals, so the "previous
+ *         reading" trend comparison was always against a fresh 0 on every
+ *         stealth wake — meaning it could only ever have worked for
+ *         repeated readings within one continuous Active-mode session, not
+ *         across deep-sleep cycles. Added rtcPrevTemp/rtcPrevHumidity (RTC-
+ *         persisted, separate from temperature/humidity so their existing
+ *         this-boot-failure-sentinel use elsewhere is untouched) as the
+ *         actual cross-sleep comparison basis.
+ *  - POLISH: wake/boot title reordered device-name-first with a middle-dot
+ *         separator ("heltechome_lola · Wake") instead of "Wake (timer):
+ *         heltechome_lola" — also dropped the "(timer)/(button)" text,
+ *         which was redundant with the tag icon ntfy already renders
+ *         (⏰ vs ✋) and was the main contributor to this being the longest,
+ *         most wrap-prone title of any message type. A few tasteful emoji
+ *         added to both the wake/boot and OTA-confirmation messages
+ *         (🔋 ⏱️ 🌐 📶 😴 🏷️ ⚙️ 📦).
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.60 — 2026-07-25
@@ -113,249 +150,7 @@
  *         (installed by pre-tracking firmware)") instead of a bare
  *         "unknown" that reads like something went wrong.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.57 — 2026-07-25
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX + ENHANCE: the post-OTA "Firmware Updated" ntfy confirmation
- *         existed already but had a real bug — a missing separator meant
- *         the version line ran straight into "Boot #" with no space/newline
- *         ("v5.55 -> v5.56Boot #42..."). Also missing: which of the four
- *         install paths triggered it, install time, and any build stats.
- *         Fixed and extended:
- *         • New "via" field (NVS) — "auto" (checkbox), "mqtt" (remote
- *           request), "manual-web" (GitHub button), "manual-upload" (raw
- *           file upload) — persisted at install time by all four install
- *           call sites, read back on the next boot. Shown as a plain label
- *           ("auto-update", "remote request", etc.) — matters most for the
- *           two unattended paths, where confirming *that* an install
- *           happened matters as much as confirming *what* changed.
- *         • CRC32 + size (KB) persisted alongside prev_ver for the two
- *           manifest-based paths (auto/mqtt/manual-web all know these from
- *           the manifest already fetched; manual-upload has no manifest so
- *           this is correctly omitted for that path, not faked).
- *         • Install time (local HH:MM if NTP synced) added.
- *         • MQTT ota_applied event gains matching via/crc32/size_kb fields.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.56 — 2026-07-25
- * ─────────────────────────────────────────────────────────────────────────────
- *  - CLARITY: Reworked the wake/boot ntfy message layout:
- *         • "Wake: <reason>" line dropped — the ntfy title (e.g.
- *           "Wake (timer): heltechome_lola") already says this; having it
- *           twice was redundancy, not a second piece of information.
- *         • "Boot#41 (reset#35 +6)" math shorthand replaced with a plain
- *           sentence on its own line: "Boot#41 — 6 wakes since reset #35".
- *           Previously it sat on the same line as "Reset: <reason>", which
- *           meant "reset" appeared twice with two different meanings (wake
- *           reset cause vs. lifetime reset count) — now on separate lines.
- *         • "On:" relabeled "Uptime:" — clearer, standard terminology for
- *           what it actually measures (time since last reset).
- *         • Temp/Hum line now sent bold via ntfy Markdown (X-Markdown
- *           header), added as a new optional 5th param to sendNtfy()
- *           (default false — every other call site unaffected, still plain
- *           text). Only the wake/boot summary opts in.
- *         • Degree symbol added ("25.6°C" not "25.6C"), matching the OLED
- *           display's existing formatting.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.55 — 2026-07-24
- * ─────────────────────────────────────────────────────────────────────────────
- *  - NEW: Unattended OTA install, two ways to trigger it:
- *         1. Remote request — this firmware was publish-only until now.
- *            Added the first inbound MQTT subscription: a RETAINED message
- *            on "<mqtt_topic>/ota/request" (payload "1"/"true"/"on").
- *            Retained delivery means it doesn't matter the device is asleep
- *            when the message is published — the broker holds it and
- *            delivers it the moment this device next connects (worst case
- *            one sleep interval later, not instant — the radio is fully off
- *            during deep sleep and cannot be woken by an incoming packet).
- *            Intended to be set by an ntfy "http" action button on the
- *            update-available notification, hitting the broker's HTTP API.
- *         2. New "Auto-install updates when found" checkbox in Settings ->
- *            OTA Updates (persisted, "ota"/"auto_update"). When on, any
- *            wake that confirms an update is available installs it
- *            immediately with no confirmation step.
- *         Both paths share handleOtaAutoOrRequested(), called from loop()
- *         right after the existing periodic manifest check: stays awake
- *         through the install and for ~5 min after (skips stealth-mode
- *         short-flush for that cycle) so progress/result is visible on the
- *         OLED and web UI before the device sleeps again, matching the
- *         existing manual-install UX. A request with no update actually
- *         available clears the retained flag and sends an ntfy note instead
- *         of silently doing nothing. An install that fails leaves
- *         otaUpdateAvailable set for retry on the next wake and sends an
- *         ntfy alert rather than failing silently.
- *  - FIX (latent, caught while building the above): otaDownloadUrl/
- *         otaCrc32Expected/otaFileSize are plain globals, not RTC-persisted
- *         — only rtcOtaAvailable survives deep sleep. On the (common) wakes
- *         where the 24h interval guard skips a live manifest re-fetch,
- *         otaUpdateAvailable correctly restores to true from RTC but the
- *         URL/CRC/size needed to actually install were empty. Unattended
- *         install now force-refetches the manifest in that specific
- *         situation before deciding there's nothing to do. This gap existed
- *         for manual installs too in principle, but a person looking at the
- *         dashboard triggers a check as part of loading the page, so it was
- *         never actually hit there.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.54 — 2026-07-24
- * ─────────────────────────────────────────────────────────────────────────────
- *  - CLARITY: The displayed Boot# is bootCount = nvsBootBase (lifetime hard
- *         resets, NVS-persisted) + rtcBootOffset (sleep-wake cycles since
- *         that last reset, RTC-memory only, zeroed on any non-sleep reset).
- *         This is correct and intentional (avoids an NVS flash write every
- *         2h sleep cycle), but a genuine reset event makes the combined
- *         number drop sharply with nothing in the report explaining why --
- *         e.g. Boot#105 -> Boot#34 after an int-wdt reset, which read like
- *         data loss/corruption even though nothing was actually lost.
- *         ntfy boot/wake messages, the standard-platform MQTT boot JSON, and
- *         the web dashboard footer (via hover tooltip) now all show the
- *         breakdown explicitly: "Boot#41 (reset#34 +7)" -- reset#34 is
- *         nvsBootBase (lifetime resets), +7 is rtcBootOffset (cycles since).
- *         MQTT gains a new reset_count field alongside the existing
- *         sleep_wakes field (which was already rtcBootOffset, just not
- *         paired with the reset count it's offset from). No change to the
- *         underlying counting logic or NVS write frequency -- display only.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.53 — 2026-07-16
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: A genuine BROWNOUT reset previously always forced the full Active
- *         boot path (OLED + LED on, 180s WiFiManager portal budget) because
- *         stealthThisWake was gated on wokeByTimer alone, and a brownout
- *         reset reports wakeup cause as undefined, not TIMER. That meant the
- *         single most power-hungry boot path ran automatically at exactly
- *         the moment the supply was already stressed enough to have browned
- *         out. stealthThisWake now also goes true on a BROWNOUT reset (when
- *         Stealth is the configured wakeDisplayMode) -- no OLED/LED, and the
- *         v5.52 10s stealth portal timeout now actually applies to brownout
- *         recoveries too. Side effect: the "Mode: Stealth" label in ntfy
- *         reports (which reflects the configured setting, not runtime
- *         behaviour) is now also true to what actually happened this boot.
- *  - FIX: powerDownPeripherals() fired the MQTT "sleeping" status publish,
- *         then the ntfy Sleep: HTTP POST, then began WiFi teardown
- *         (disconnect/WIFI_OFF/esp_wifi_stop()) with under ~200ms of total
- *         gap between the last TX and the radio-off transition. That's the
- *         heaviest current draw of the whole cycle stacked directly against
- *         a transition that has its own brief current cost. Added a 150ms
- *         settle delay after the last publish/notify call and before WiFi
- *         teardown starts, and widened the pre-esp_wifi_stop() delay from
- *         100ms to 150ms, to reduce the odds of exactly that pattern (which
- *         matched the "clean wake, brownout right at sleep-entry" cycles
- *         seen in the v5.52 logs almost exactly).
- *  - NOTE: Neither fix changes the underlying current-delivery headroom of
- *         the battery/regulator -- a bulk capacitor across the battery input
- *         near the regulator is still the recommended hardware fix if
- *         brownouts continue. These changes reduce how often the firmware's
- *         own behaviour asks for a current spike at a bad moment, and make
- *         sure a brownout, if it happens anyway, is handled as cheaply as
- *         possible instead of triggering the most expensive boot path.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.52 — 2026-07-14
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: Stealth timer wake that fails to reconnect (fast static-IP path AND
- *         full WiFiManager autoConnect() both fail) no longer calls
- *         ESP.restart(). That blind restart-on-failure was the most likely
- *         cause of the "missing boot numbers" gaps seen in ntfy logs (e.g.
- *         Boot#5 -> Boot#9): each failed connect attempt under a sagging
- *         battery restarted the chip before publishBootSummary() could ever
- *         run, so nothing was reported for those cycles even though the NVS
- *         boot counter incremented every time.
- *         Fix: stealth-wake connect failures now increment rtcWifiFailStreak
- *         (RTC memory, survives the next timer wake) and log rtcLastFailMv
- *         (raw ADC mV at the moment of failure), then go straight to
- *         goToDeepSleep() instead of restarting. The next cycle that DOES
- *         connect reports "WiFi fails since last report: N" in both the ntfy
- *         message and MQTT boot JSON, so failed cycles are now visible
- *         instead of silent. Active/button wakes and forced-portal (double
- *         reset) behaviour is unchanged — still restarts on failure, since a
- *         person is actually present for those.
- *  - FIX: Config portal timeout was a flat 180 s regardless of wake type,
- *         meaning a stealth timer wake with no saved-network connection would
- *         sit in an unattended AP/portal state (nobody can reach it) for up
- *         to 3 minutes, burning battery, before finally failing. Stealth
- *         wakes now use a 10 s portal timeout; Active/button/forced-portal
- *         wakes keep 180 s since a person may actually be configuring it.
- *  - DEBUG: Added a consistency check between esp_reset_reason() and
- *         rtcBootEpoch. The RTC-memory-preservation assumption documented at
- *         the truePowerEvent check (soft resets should never clear
- *         rtcBootEpoch) was directly contradicted by the v5.51 logs — a
- *         software-restart boot (Boot#9) showed "On: 1s", meaning RTC memory
- *         was disturbed despite a non-power reset reason. rtcEpochGlitchThisBoot
- *         now flags exactly that mismatch and surfaces it in the ntfy Reset:
- *         field and MQTT boot JSON ("rtc_epoch_glitch") instead of silently
- *         trusting the reset-reason register — this is the clearest available
- *         signal of a marginal power event too brief/shallow to trip the
- *         hardware brownout detector.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.51 — 2026-07-11
- * ─────────────────────────────────────────────────────────────────────────────
- *  - DEBUG: esp_reset_reason() (already read by printResetReason() at boot,
- *           previously Serial-only) is now latched into lastResetReasonStr and
- *           surfaced in the ntfy boot message ("Reset: ...") and MQTT boot
- *           JSON ("reset_reason"). Distinguishes a genuine BROWNOUT from a
- *           normal cold power-on — both currently report identically as
- *           "Wake: power-on" from esp_sleep_get_wakeup_cause() alone, which
- *           made it impossible to tell whether "power-on" boots after a 120min
- *           sleep were expected timer wakes gone wrong or actual brownouts.
- *           ntfy title flags "Boot (BROWNOUT!)" distinctly so it's visible
- *           without opening the notification body.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.50 — 2026-07-02
- * ─────────────────────────────────────────────────────────────────────────────
- *  - UI:  ntfy connection config (enable, what-to-send toggles, server, topic,
- *         token) merged into the tabbed card as a 4th tab, alongside Standard/
- *         Adafruit/Ubidots. Card renamed "MQTT Platforms" → "Publish Targets"
- *         to accurately reflect that ntfy is HTTP-based, not MQTT protocol —
- *         grouped by function (all are publish/notify destinations) not by
- *         transport. ntfy tab dot synced live to the Enable ntfy checkbox
- *         (added id='ntfy_enabled' alongside existing name attr — save handler
- *         unaffected, still reads by name). Sensor Alerts (threshold config)
- *         stays a standalone section below the card — it's alerting rules, not
- *         a publish target itself.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.49 — 2026-07-02
- * ─────────────────────────────────────────────────────────────────────────────
- *  - UI:  Standard MQTT / Adafruit IO / Ubidots merged into a single collapsible
- *         "MQTT Platforms" card with tabbed sub-sections (Docksentry-style).
- *         Open/closed via header click; tabs switch panels without page reload.
- *         Each tab shows a live status dot synced to the Platform checkboxes
- *         above (green = enabled). Default active tab = first enabled platform.
- *         Field names, values, and POST handling completely unchanged — this is
- *         a pure presentation/grouping change, no server-side logic touched.
- *         Device name, Platform picker, and Publish Interval remain standalone
- *         sections above the card, unchanged.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.48 — 2026-06-29
- * ─────────────────────────────────────────────────────────────────────────────
- *  - UI:  Removed duplicate device_name from ntfy message bodies. Title already
- *         carries "Event: device_name" — the first body line repeating it was
- *         redundant. Fixed in 7 sends: boot/wake summary, sensor publish, sleep,
- *         temp high/low, humidity high/low. Battery critical/low and OTA update
- *         notifications left unchanged (their titles don't include device_name).
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.47 — 2026-06-29
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: getTotalUptime() uint32_t underflow producing "49710d" garbage.
- *         Root cause: fast crystal accumulates ~2min drift per 120min sleep;
- *         first NTP packet snaps time to correct value, second correction packet
- *         can step it back slightly below rtcBootEpoch. uint32_t subtraction
- *         wraps to ~UINT32_MAX (4,294,967,175s ≈ 49710 days).
- *         Fix: int64_t arithmetic for the delta; if delta < 0 re-latch
- *         rtcBootEpoch to time(nullptr) and return "syncing..." that cycle.
- *  - FIX: Button press during stealth timer wake left OLED dark and LED off.
- *         Root cause: attachClick() only set disableDeepSleepUntil — never
- *         called display.displayOn() or cleared stealthThisWake. ui.init()
- *         was already called in setup() (then displayOff()), so all UI frames
- *         are registered; displayOn() alone is sufficient to restore display.
- *         Fix: attachClick() and attachDoubleClick() now check stealthThisWake,
- *         call display.displayOn() + led.Breathe() + clear stealthThisWake.
  *
  *
  *
@@ -418,7 +213,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.60"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.61"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -812,6 +607,14 @@ static unsigned long dvdFlashMs = 0;
 DHT_Unified dht(DHT_PIN, DHT_TYPE);
 float temperature = 0;
 float humidity    = 0;
+// v5.61: cross-deep-sleep trend comparison needs a persisted "previous
+// reading" — temperature/humidity above are plain globals (reset to 0 every
+// wake) used elsewhere as a this-boot-read-failure sentinel via the
+// "!= 0.0f" checks, so changing THEIR persistence would ripple into every
+// one of those checks. Adding a separate RTC-persisted shadow pair instead
+// is surgical: only the trend computation below reads/writes these.
+RTC_DATA_ATTR float rtcPrevTemp     = 0;
+RTC_DATA_ATTR float rtcPrevHumidity = 0;
 
 // ── Trend tracking — previous reading for up/down arrow indicators ────────────
 // Dead-bands filter ADC noise: arrows only appear on genuine movement.
@@ -2474,8 +2277,8 @@ void publishBootSummary() {
     // Title reflects wakeup reason
     String ntfyTitle;
     String wakeIcon;
-    if (reason == "button")   { ntfyTitle = "Wake (button)"; wakeIcon = "hand"; }
-    else if (reason == "timer") { ntfyTitle = "Wake (timer)";  wakeIcon = "alarm_clock"; }
+    if (reason == "button")   { ntfyTitle = "Wake"; wakeIcon = "hand"; }
+    else if (reason == "timer") { ntfyTitle = "Wake";  wakeIcon = "alarm_clock"; }
     else if (lastResetReasonStr == "BROWNOUT") { ntfyTitle = "Boot (BROWNOUT!)"; wakeIcon = "warning"; }
     else                        { ntfyTitle = "Boot";          wakeIcon = "electric_plug"; }
 
@@ -2487,6 +2290,12 @@ void publishBootSummary() {
 
     String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "°C" : "--";
     String hStr = (!isnan(humidity)    && humidity    != 0.0f) ? String(humidity,    1) + "%" : "--";
+    // v5.61: trend arrows vs the previous deep-sleep wake's reading (see
+    // rtcPrevTemp/rtcPrevHumidity + the trend computation in readSensor()).
+    // Omitted entirely when stable/within the dead-band — matches the OLED's
+    // own convention of drawing nothing rather than a neutral/right arrow.
+    String tArrow = (trendTemp     > 0) ? " ▲" : (trendTemp     < 0) ? " ▼" : "";
+    String hArrow = (trendHumidity > 0) ? " ▲" : (trendHumidity < 0) ? " ▼" : "";
     String resetStr = lastResetReasonStr + (rtcEpochGlitchThisBoot ? " (RTC glitch?)" : "");
     // v5.56: plain-English breakdown instead of "Boot#41 (reset#35 +6)" math
     // shorthand — and moved off the Reset: line, since "reset" meant two
@@ -2496,19 +2305,24 @@ void publishBootSummary() {
     // it twice was pure redundancy, not a second piece of information.
     String bootLine = "Boot#" + String(bootCount) + " — " + String(rtcBootOffset) +
                        " wake" + (rtcBootOffset == 1 ? "" : "s") + " since reset #" + String(nvsBootBase);
-    String msg = "**Temp: " + tStr + "  Hum: " + hStr + "**\n"
-                 "Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
+    // v5.61: explicit markdown link for the IP — a bare IP relied on ntfy's
+    // plain-text auto-link heuristic, which markdown mode (enabled below for
+    // the bold Temp/Hum line) suppresses. This restores tap-to-open on mobile
+    // regardless of that heuristic.
+    String ipLink = "[" + WiFi.localIP().toString() + "](http://" + WiFi.localIP().toString() + ")";
+    String msg = "**Temp: " + tStr + tArrow + "  Hum: " + hStr + hArrow + "**\n"
+                 "🔋 Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
                  "Reset: " + resetStr + "  Mode: " + modeStr + "\n"
                  + bootLine + "\n"
-                 "Uptime: " + getTotalUptime() + "\n"
-                 "IP: " + WiFi.localIP().toString() + "  v" + FW_VERSION;
+                 "⏱️ Uptime: " + getTotalUptime() + "\n"
+                 "🌐 IP: " + ipLink + "  v" + FW_VERSION;
     if (rtcWifiFailStreak > 0) {
-      msg += "\nWiFi fails since last report: " + String(rtcWifiFailStreak) +
+      msg += "\n📶 WiFi fails since last report: " + String(rtcWifiFailStreak) +
              "  (last raw: " + String(rtcLastFailMv) + "mV)";
     }
     int est = estSleepsRemaining();
-    if (est >= 0) msg += "\n~" + String(est) + " sleeps remaining";
-    sendNtfy(ntfyTitle + ": " + device_name, msg, 2, wakeIcon + "," + srcIcon, true);
+    if (est >= 0) msg += "\n😴 ~" + String(est) + " sleeps remaining";
+    sendNtfy(device_name + " · " + ntfyTitle, msg, 2, wakeIcon + "," + srcIcon, true);
   } else {
     if (!ntfy_enabled)                 Serial.println("[NTFY-BOOT] Skipped -- ntfy disabled");
     if (ntfy_enabled && !ntfy_on_boot) Serial.println("[NTFY-BOOT] Skipped -- on_boot disabled");
@@ -2562,16 +2376,24 @@ void readSensor() {
   }
 
   // Commit whichever channels succeeded; failed channels keep their prior global
-  // ── Trend: compare new reading vs current global (prior reading) ─────────────
-  if (tempOk && !isnan(temperature) && temperature != 0.0f) {
-    float dt = newTemp - temperature;
-    trendTemp = (dt >  TREND_DEAD_TEMP) ?  1 :
-                (dt < -TREND_DEAD_TEMP) ? -1 : 0;
+  // ── Trend: compare new reading vs the RTC-persisted previous reading ──────────
+  // (temperature/humidity themselves are this-boot-only — see the RTC_DATA_ATTR
+  // comment on rtcPrevTemp/rtcPrevHumidity above for why a separate pair is used)
+  if (tempOk && !isnan(newTemp)) {
+    if (rtcPrevTemp != 0.0f) {   // skip on the very first-ever reading (fresh RTC memory)
+      float dt = newTemp - rtcPrevTemp;
+      trendTemp = (dt >  TREND_DEAD_TEMP) ?  1 :
+                  (dt < -TREND_DEAD_TEMP) ? -1 : 0;
+    }
+    rtcPrevTemp = newTemp;
   }
-  if (humOk && !isnan(humidity) && humidity != 0.0f) {
-    float dh = newHum - humidity;
-    trendHumidity = (dh >  TREND_DEAD_HUM) ?  1 :
-                    (dh < -TREND_DEAD_HUM) ? -1 : 0;
+  if (humOk && !isnan(newHum)) {
+    if (rtcPrevHumidity != 0.0f) {
+      float dh = newHum - rtcPrevHumidity;
+      trendHumidity = (dh >  TREND_DEAD_HUM) ?  1 :
+                      (dh < -TREND_DEAD_HUM) ? -1 : 0;
+    }
+    rtcPrevHumidity = newHum;
   }
   if (tempOk) temperature = newTemp;
   if (humOk)  humidity    = newHum;
@@ -4505,14 +4327,17 @@ void setupOTA() {
          "<option value='3'");
     if (screenCleanPreset==3) h+=F(" selected");
     h+=F(">Full Bright Pulse (all pixels + 1s flash)</option></select>"
-      // v5.60: preview any pattern instantly, no Save Settings needed first —
-      // each link runs an 8s preview of that specific pattern without
-      // touching the saved scrn_preset value at all.
-      "<div style='margin-top:6px;font-size:12px;color:#78909c'>Preview: "
-      "<a href='/screen_clean_preview?p=0' style='color:#4db6ac;margin-right:10px'>Checkerboard</a>"
-      "<a href='/screen_clean_preview?p=1' style='color:#4db6ac;margin-right:10px'>Invert Ramp</a>"
-      "<a href='/screen_clean_preview?p=2' style='color:#4db6ac;margin-right:10px'>Scanline</a>"
-      "<a href='/screen_clean_preview?p=3' style='color:#4db6ac'>Full Bright</a>"
+      // v5.61: was 4 static per-pattern links — didn't scale, and wasn't
+      // the same pattern as the screensaver's dropdown+single-button
+      // preview. Now identical: one button reads whatever's currently
+      // selected in the dropdown above, no save needed, scales to any
+      // number of future presets with zero new UI.
+      "<div style='margin:12px 0 8px 0'>"
+      "<button type='button' class='btn' style='font-size:13px;background:#4db6ac'"
+      " onclick=\"window.location='/screen_clean_preview?p='+document.querySelector('[name=scrn_preset]').value\">"
+      "&#x25B6; Preview Selected Pattern</button>"
+      "<span style='display:block;margin-top:6px;font-size:11px;color:#9e9e9e'>"
+      "Runs the chosen pattern for 8s &mdash; no save needed.</span>"
       "</div>"
       "<label>Duration (seconds)</label>"
       "<div class='row'><input type='number' name='scrn_dur' value='");
@@ -5564,13 +5389,13 @@ void setup() {
           struct tm ti; getLocalTime(&ti, 0);
           snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", ti.tm_hour, ti.tm_min);
         }
-        String otaMsg = "v" + prevVer + " \u2192 v" + String(FW_VERSION) + "\n"
-                         "Via: " + viaLabel + "  at " + String(timeBuf) + "\n"
+        String otaMsg = "🏷️ v" + prevVer + " → v" + String(FW_VERSION) + "\n"
+                         "⚙️ Via: " + viaLabel + "  at " + String(timeBuf) + "\n"
                          "Boot#" + String(bootCount);
         if (otaCrc.length()) {
-          otaMsg += "\nCRC32: " + otaCrc + "  Size: " + String(otaKb) + "KB";
+          otaMsg += "\n📦 CRC32: " + otaCrc + "  Size: " + String(otaKb) + "KB";
         }
-        otaMsg += "\nIP: " + WiFi.localIP().toString();
+        otaMsg += "\n🌐 IP: " + WiFi.localIP().toString();
         sendNtfy("Firmware Updated: " + device_name, otaMsg, 3, "white_check_mark,rocket");
       }
     }

@@ -1,8 +1,8 @@
 {
-  "version": "5.60",
+  "version": "5.61",
   "build_date": "2026-07-25",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.60/heltec_wifkit32v2_v560_D45A6AA7_firmware.ino.bin",
   "size": 1464560,
   "crc32": "D45A6AA7",
-  "changelog": "Display Care preview \u2014 4 new Preview links,Stay Awake +5 min \u2014 new button in the dashboard header,"
+  "changelog": "Display Care preview fixed ,ntfy summary clearer "
 }
