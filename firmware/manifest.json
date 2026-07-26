@@ -1,8 +1,8 @@
 {
   "version": "5.61",
-  "build_date": "2026-07-25",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.60/heltec_wifkit32v2_v560_D45A6AA7_firmware.ino.bin",
-  "size": 1464560,
-  "crc32": "D45A6AA7",
+  "build_date": "2026-07-26",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.61/heltec_wifkit32v2_v561_05B601D2_firmware.ino.bin",
+  "size": 1465104,
+  "crc32": "05B601D2",
   "changelog": "Display Care preview fixed ,ntfy summary clearer "
 }
