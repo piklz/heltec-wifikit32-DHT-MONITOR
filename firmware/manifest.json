@@ -1,8 +1,8 @@
 {
-  "version": "5.62",
+  "version": "5.63",
   "build_date": "2026-07-26",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.62/heltec_wifkit32v2_v562_287968A2_firmware.ino.bin",
   "size": 1465712,
   "crc32": "287968A2",
-  "changelog": "ntfy  summary tweaked, ntfy_on_publish extended to full parity: real \u00b0C, trend arrows "
+  "changelog": "dropdown on Settings → OTA Updates Every 6/12/24/48 hours, 24h still the default"
 }

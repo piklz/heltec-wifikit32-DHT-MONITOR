@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.62
+ * Version:       5.63
  * Last Updated:  2026-07-26
  * License:       MIT
  *
@@ -29,6 +29,20 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.63 — 2026-07-26
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: OTA manifest check interval is now a saved setting instead of a
+ *         fixed 24h #define — dropdown on Settings -> OTA Updates (6h / 12h
+ *         / 24h default / 48h), persisted in NVS. Lets the cadence be
+ *         tightened temporarily (e.g. while actively iterating on firmware
+ *         and wanting faster unattended pickup) without that faster cadence
+ *         staying on permanently and costing extra radio-on time/day for
+ *         the rest of the time nothing's actually changed upstream. The
+ *         underlying mechanic is unchanged either way — still piggybacks
+ *         on whatever wake happens next after the interval elapses, never
+ *         creates an extra wake just to check.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.62 — 2026-07-26
@@ -142,6 +156,8 @@
  *
  *
  *
+ *
+ *
  */
 
 
@@ -201,7 +217,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.62"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.63"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -219,7 +235,11 @@ static const char FW_VER_MARKER[] = "FW_VER:" FW_VERSION;
 #define MANIFEST_URL          "https://raw.githubusercontent.com/piklz/heltec-wifikit32-DHT-MONITOR/main/firmware/manifest.json"
 // Check at most once per day. Persisted in NVS so deep-sleep wakes don't reset the clock.
 // Falls back to checking every wake if NTP isn't synced yet (epoch timestamp = 0).
-#define OTA_CHECK_INTERVAL_SECS  86400UL   // 24 hours between remote manifest fetches
+// v5.63: was a fixed #define — now a saved setting (Settings -> OTA Updates),
+// so the check cadence can be tightened temporarily (e.g. while actively
+// iterating on firmware) without needing that faster cadence permanently.
+// Default matches the old hardcoded value.
+uint32_t otaCheckIntervalSecs = 86400UL;   // 24 hours — options: 6h/12h/24h/48h
 #define OTA_NTFY_COOLDOWN_MS     86400000UL   // max one ntfy per 24 h for same version
 
 bool     otaUpdateAvailable = false;
@@ -860,6 +880,7 @@ void saveNtfyConfig() {
 void loadOtaConfig() {
   preferences.begin("ota", true);
   otaAutoUpdate = preferences.getBool("auto_update", false);
+  otaCheckIntervalSecs = preferences.getUInt("chk_ivl", 86400UL);
   otaWebPending = preferences.getBool  ("web_pend", false);
   otaWebFrom    = preferences.getString("web_from", "");
   otaWebVia     = preferences.getString("web_via",  "");
@@ -871,6 +892,7 @@ void loadOtaConfig() {
 void saveOtaConfig() {
   preferences.begin("ota", false);
   preferences.putBool("auto_update", otaAutoUpdate);
+  preferences.putUInt("chk_ivl", otaCheckIntervalSecs);
   preferences.end();
 }
 
@@ -2912,7 +2934,7 @@ void checkOtaManifest(bool force) {
   if (!force && lastOtaCheck > 0) return;   // already checked this wake
   lastOtaCheck = millis();                   // mark as checked for this wake
 
-  // ── NVS epoch guard: at most once per OTA_CHECK_INTERVAL_SECS ─────────────
+  // ── NVS epoch guard: at most once per otaCheckIntervalSecs ────────────────
   if (!force) {
     time_t now = time(nullptr);
     if (now > 100000UL) {
@@ -2920,9 +2942,9 @@ void checkOtaManifest(bool force) {
       preferences.begin("ota", true);
       uint32_t lastChkEpoch = preferences.getUInt("last_chk", 0);
       preferences.end();
-      if (lastChkEpoch > 0 && (uint32_t)now - lastChkEpoch < OTA_CHECK_INTERVAL_SECS) {
+      if (lastChkEpoch > 0 && (uint32_t)now - lastChkEpoch < otaCheckIntervalSecs) {
         Serial.printf("[OTA] Next check in %lus — skipping\n",
-          (unsigned long)(OTA_CHECK_INTERVAL_SECS - ((uint32_t)now - lastChkEpoch)));
+          (unsigned long)(otaCheckIntervalSecs - ((uint32_t)now - lastChkEpoch)));
         // Still sync runtime flag from RTC in case it was set a previous wake
         otaUpdateAvailable = rtcOtaAvailable;
         otaCheckDone = true;
@@ -4303,9 +4325,23 @@ void setupOTA() {
 
     // ── OTA Updates ─────────────────────────────────────────────────────────
     h += F("<div class='sec'><h2>&#x1F680; OTA Updates</h2>"
-      "<div class='info'>Manifest is checked at most once per 24h, on whatever "
-      "wake happens next — see the dashboard banner or /ota_check to install "
-      "manually at any time.</div>"
+      "<div class='info'>Manifest is checked on whatever wake happens next "
+      "after the interval below elapses — see the dashboard banner or "
+      "/ota_check to install manually at any time.</div>"
+      "<label>Check interval</label>"
+      "<div class='row'><select name='ota_ivl'>");
+    {
+      struct { uint32_t secs; const char* label; } ivls[] = {
+        {21600UL, "Every 6 hours"}, {43200UL, "Every 12 hours"},
+        {86400UL, "Every 24 hours (default)"}, {172800UL, "Every 48 hours"}
+      };
+      for (auto& iv : ivls) {
+        h += "<option value='" + String(iv.secs) + "'";
+        if (otaCheckIntervalSecs == iv.secs) h += F(" selected");
+        h += ">"; h += iv.label; h += F("</option>");
+      }
+    }
+    h += F("</select></div>"
       "<label class='cb'><input type='checkbox' name='ota_auto'");
     if (otaAutoUpdate) h += F(" checked");
     h += F("> Auto-install updates when found (no confirmation — device stays "
@@ -4459,6 +4495,10 @@ void setupOTA() {
     ps_vext=server.hasArg("ps_vext"); ps_oled=server.hasArg("ps_oled");
     ps_dht =server.hasArg("ps_dht");  ps_cpu =server.hasArg("ps_cpu");
     otaAutoUpdate = server.hasArg("ota_auto");
+    if (server.hasArg("ota_ivl")) {
+      uint32_t iv = (uint32_t)server.arg("ota_ivl").toInt();
+      if (iv==21600UL || iv==43200UL || iv==86400UL || iv==172800UL) otaCheckIntervalSecs = iv;
+    }
     saveOtaConfig();
     if(server.hasArg("ps_cpu_wake_mhz")){
       uint32_t mhz=(uint32_t)server.arg("ps_cpu_wake_mhz").toInt();
