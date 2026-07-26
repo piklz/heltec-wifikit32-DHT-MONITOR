@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.61
+ * Version:       5.62
  * Last Updated:  2026-07-26
  * License:       MIT
  *
@@ -29,6 +29,24 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.62 — 2026-07-26
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - "Wake: <reason>" text restored in the wake/boot ntfy body (dropped in
+ *         v5.56 when it was redundant with the title — title's since been
+ *         shortened to just "Wake", so this is the only place the specific
+ *         timer/button/power-on reason shows as text now). Placed on the
+ *         same line as Reset:/Mode: with a small inline emoji per reason
+ *         (⏰ timer, ✋ button, 🔌 power-on/boot) — distinct from the ntfy
+ *         Tag icon shown in the title bar.
+ *  - ntfy_on_publish ("Sensor:") message brought to parity with the
+ *         wake/boot message: real °C (was plain "C"), trend arrows (▲/▼,
+ *         same RTC-persisted cross-sleep comparison as the wake/boot
+ *         message), bold Temp/Hum, clickable IP link, 🔋🌐 emoji, and the
+ *         device-name-first title style. The old "ASCII safe, no degree
+ *         symbol" comment predated UTF8/emoji being confirmed working fine
+ *         elsewhere in this codebase.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.61 — 2026-07-26
@@ -122,36 +140,6 @@
  *         always treats as non-stealth, so showOtaBootSplash() already
  *         runs on the very next boot after ANY install, auto or manual.)
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.58 — 2026-07-25
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: Clicking "Check for Updates" on the OTA dashboard page (or the
- *         page's own on-load fetch) could trigger an unattended install if
- *         the "Auto-install" checkbox happened to be on — /ota_check just
- *         forces a manifest re-fetch to refresh the banner/changelog, but
- *         the very next loop() tick's handleOtaAutoOrRequested() saw
- *         otaUpdateAvailable go true and had no way to tell "background
- *         check" apart from "person is actively reviewing this on the
- *         dashboard right now". New otaManualCheckThisWake flag, set the
- *         moment /ota_check is hit, suppresses the auto-update install path
- *         for the rest of that wake only (plain global — resets itself on
- *         the next wake/boot, no explicit clearing needed). The existing
- *         manual "Install Now" button is completely unaffected — still
- *         works exactly as before. The MQTT-requested-install path is also
- *         unaffected, since that's already an explicit "install it"
- *         instruction from the person, not a passive browse.
- *  - FIX: "Via: unknown" on the post-update ntfy confirmation wasn't a bug
- *         in v5.57's logic — it correctly reported that NVS had no via
- *         value, because the install that produced it was PERFORMED by the
- *         OLD pre-v5.57 firmware, which had no code to write that field
- *         yet. One-time artifact of upgrading past v5.57, self-resolving —
- *         every install performed BY v5.57+ always records a real via
- *         value. Reworded the fallback to say so explicitly ("n/a
- *         (installed by pre-tracking firmware)") instead of a bare
- *         "unknown" that reads like something went wrong.
- *
- *
- *
  *
  *
  */
@@ -213,7 +201,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.61"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.62"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -2195,14 +2183,22 @@ void publishSensorData() {
     mqttUBI.loop();
   }
 
-  // Optional ntfy on each publish — ASCII safe, no degree symbol
+  // Optional ntfy on each publish — v5.62: brought to parity with the
+  // wake/boot message (trend arrows, real °C, emoji, clickable IP). The old
+  // "ASCII safe, no degree symbol" caution predates UTF8/emoji being
+  // confirmed working fine elsewhere in this codebase (title bar icons,
+  // the wake/boot message's °C and ▲/▼, etc.) — no longer a real concern.
   if (ntfy_enabled && ntfy_on_publish) {
     float battV2 = batteryVoltFloat / 1000.0f;
-    String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "C" : "--";
+    String tStr = (!isnan(temperature) && temperature != 0.0f) ? String(temperature, 1) + "°C" : "--";
     String hStr = (!isnan(humidity)    && humidity    != 0.0f) ? String(humidity,    1) + "%" : "--";
-    String msg = "Temp: " + tStr + "  Hum: " + hStr + "\n"
-                 "Batt: " + String(battV2, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr();
-    sendNtfy("Sensor: " + device_name, msg, 2, "thermometer");
+    String tArrow = (trendTemp     > 0) ? " ▲" : (trendTemp     < 0) ? " ▼" : "";
+    String hArrow = (trendHumidity > 0) ? " ▲" : (trendHumidity < 0) ? " ▼" : "";
+    String ipLink = "[" + WiFi.localIP().toString() + "](http://" + WiFi.localIP().toString() + ")";
+    String msg = "**Temp: " + tStr + tArrow + "  Hum: " + hStr + hArrow + "**\n"
+                 "🔋 Batt: " + String(battV2, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
+                 "🌐 IP: " + ipLink;
+    sendNtfy(device_name + " · Sensor", msg, 2, "thermometer", true);
   }
 }
 
@@ -2297,12 +2293,18 @@ void publishBootSummary() {
     String tArrow = (trendTemp     > 0) ? " ▲" : (trendTemp     < 0) ? " ▼" : "";
     String hArrow = (trendHumidity > 0) ? " ▲" : (trendHumidity < 0) ? " ▼" : "";
     String resetStr = lastResetReasonStr + (rtcEpochGlitchThisBoot ? " (RTC glitch?)" : "");
+    // v5.62: "Wake: <reason>" is back — dropped in v5.56 because the title
+    // said the same thing ("Wake (timer): device"), but the title's since
+    // been shortened to just "Wake" (see title-shortening note above), so
+    // this is no longer redundant — it's the only place the specific
+    // timer/button/power-on reason appears as text now. Small inline emoji
+    // per reason, distinct from the ntfy Tag icon (which sets the icon
+    // shown in the notification's title bar, not inline in the body text).
+    String reasonEmoji = (reason == "timer") ? "⏰" : (reason == "button") ? "✋" : "🔌";
     // v5.56: plain-English breakdown instead of "Boot#41 (reset#35 +6)" math
     // shorthand — and moved off the Reset: line, since "reset" meant two
     // different things on that line (wake reset *reason* vs. lifetime reset
-    // *count*). "Wake: <reason>" dropped from the body entirely — the ntfy
-    // title (e.g. "Wake (timer): heltechome_lola") already says this; having
-    // it twice was pure redundancy, not a second piece of information.
+    // *count*).
     String bootLine = "Boot#" + String(bootCount) + " — " + String(rtcBootOffset) +
                        " wake" + (rtcBootOffset == 1 ? "" : "s") + " since reset #" + String(nvsBootBase);
     // v5.61: explicit markdown link for the IP — a bare IP relied on ntfy's
@@ -2312,7 +2314,7 @@ void publishBootSummary() {
     String ipLink = "[" + WiFi.localIP().toString() + "](http://" + WiFi.localIP().toString() + ")";
     String msg = "**Temp: " + tStr + tArrow + "  Hum: " + hStr + hArrow + "**\n"
                  "🔋 Batt: " + String(v, 2) + "V  " + String(batteryPercentage) + "%  Src: " + powerSrcStr() + "\n"
-                 "Reset: " + resetStr + "  Mode: " + modeStr + "\n"
+                 + reasonEmoji + " Wake: " + reason + "  Reset: " + resetStr + "  Mode: " + modeStr + "\n"
                  + bootLine + "\n"
                  "⏱️ Uptime: " + getTotalUptime() + "\n"
                  "🌐 IP: " + ipLink + "  v" + FW_VERSION;

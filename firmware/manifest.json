@@ -1,8 +1,8 @@
 {
-  "version": "5.61",
+  "version": "5.62",
   "build_date": "2026-07-26",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.61/heltec_wifkit32v2_v561_05B601D2_firmware.ino.bin",
   "size": 1465104,
   "crc32": "05B601D2",
-  "changelog": "Display Care preview fixed ,ntfy summary clearer "
+  "changelog": "ntfy  summary tweaked, ntfy_on_publish extended to full parity: real °C, trend arrows "
 }
