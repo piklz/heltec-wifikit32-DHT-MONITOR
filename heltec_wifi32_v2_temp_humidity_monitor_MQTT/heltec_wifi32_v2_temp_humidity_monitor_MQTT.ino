@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.63
- * Last Updated:  2026-07-26
+ * Version:       5.64
+ * Last Updated:  2026-08-01
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,32 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.64 — 2026-08-01
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: crash-loop cooldown safeguard. Prompted by a real incident (ntfy
+ *         log, 31/07/2026): a tight cluster of task-wdt/int-wdt/software-
+ *         restart resets — 5+ within about 3 minutes — each one immediately
+ *         retrying WiFi on wake, exactly the current-hungry operation this
+ *         firmware's marginal-power theory (v5.51 onward) has been chasing.
+ *         New rtcConsecutiveCrashes (RTC-persisted) counts consecutive
+ *         NON-power-event hard resets — deliberately not time-window based,
+ *         since RTC memory is sometimes the very thing that glitches (see
+ *         rtcEpochGlitchThisBoot) and a wall-clock reference can't be
+ *         trusted in exactly the scenario this is meant to catch. Also
+ *         deliberately excludes POWERON/BROWNOUT resets, so a real power
+ *         cycle or a USB reflash during development always resets the
+ *         counter — this safeguard can never mistake active development
+ *         for a crash loop.
+ *         At CRASH_LOOP_THRESHOLD (3) consecutive crashes, the very next
+ *         boot skips the entire normal path — no WiFi, no OLED, no sensor
+ *         read, no MQTT/ntfy — and goes straight into a CRASH_LOOP_COOLDOWN_MS
+ *         (30 min) deep sleep instead, via new crashLoopCooldownSleep().
+ *         Button wake stays enabled throughout, so physical access always
+ *         overrides it immediately. Counter resets to 0 the moment any
+ *         cycle reaches goToDeepSleep() normally (proof the streak ended)
+ *         or a true power event occurs.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.63 — 2026-07-26
@@ -154,7 +180,277 @@
  *         always treats as non-stealth, so showOtaBootSplash() already
  *         runs on the very next boot after ANY install, auto or manual.)
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.58 — 2026-07-25
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Clicking "Check for Updates" on the OTA dashboard page (or the
+ *         page's own on-load fetch) could trigger an unattended install if
+ *         the "Auto-install" checkbox happened to be on — /ota_check just
+ *         forces a manifest re-fetch to refresh the banner/changelog, but
+ *         the very next loop() tick's handleOtaAutoOrRequested() saw
+ *         otaUpdateAvailable go true and had no way to tell "background
+ *         check" apart from "person is actively reviewing this on the
+ *         dashboard right now". New otaManualCheckThisWake flag, set the
+ *         moment /ota_check is hit, suppresses the auto-update install path
+ *         for the rest of that wake only (plain global — resets itself on
+ *         the next wake/boot, no explicit clearing needed). The existing
+ *         manual "Install Now" button is completely unaffected — still
+ *         works exactly as before. The MQTT-requested-install path is also
+ *         unaffected, since that's already an explicit "install it"
+ *         instruction from the person, not a passive browse.
+ *  - FIX: "Via: unknown" on the post-update ntfy confirmation wasn't a bug
+ *         in v5.57's logic — it correctly reported that NVS had no via
+ *         value, because the install that produced it was PERFORMED by the
+ *         OLD pre-v5.57 firmware, which had no code to write that field
+ *         yet. One-time artifact of upgrading past v5.57, self-resolving —
+ *         every install performed BY v5.57+ always records a real via
+ *         value. Reworded the fallback to say so explicitly ("n/a
+ *         (installed by pre-tracking firmware)") instead of a bare
+ *         "unknown" that reads like something went wrong.
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.57 — 2026-07-25
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX + ENHANCE: the post-OTA "Firmware Updated" ntfy confirmation
+ *         existed already but had a real bug — a missing separator meant
+ *         the version line ran straight into "Boot #" with no space/newline
+ *         ("v5.55 -> v5.56Boot #42..."). Also missing: which of the four
+ *         install paths triggered it, install time, and any build stats.
+ *         Fixed and extended:
+ *         • New "via" field (NVS) — "auto" (checkbox), "mqtt" (remote
+ *           request), "manual-web" (GitHub button), "manual-upload" (raw
+ *           file upload) — persisted at install time by all four install
+ *           call sites, read back on the next boot. Shown as a plain label
+ *           ("auto-update", "remote request", etc.) — matters most for the
+ *           two unattended paths, where confirming *that* an install
+ *           happened matters as much as confirming *what* changed.
+ *         • CRC32 + size (KB) persisted alongside prev_ver for the two
+ *           manifest-based paths (auto/mqtt/manual-web all know these from
+ *           the manifest already fetched; manual-upload has no manifest so
+ *           this is correctly omitted for that path, not faked).
+ *         • Install time (local HH:MM if NTP synced) added.
+ *         • MQTT ota_applied event gains matching via/crc32/size_kb fields.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.56 — 2026-07-25
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - CLARITY: Reworked the wake/boot ntfy message layout:
+ *         • "Wake: <reason>" line dropped — the ntfy title (e.g.
+ *           "Wake (timer): heltechome_lola") already says this; having it
+ *           twice was redundancy, not a second piece of information.
+ *         • "Boot#41 (reset#35 +6)" math shorthand replaced with a plain
+ *           sentence on its own line: "Boot#41 — 6 wakes since reset #35".
+ *           Previously it sat on the same line as "Reset: <reason>", which
+ *           meant "reset" appeared twice with two different meanings (wake
+ *           reset cause vs. lifetime reset count) — now on separate lines.
+ *         • "On:" relabeled "Uptime:" — clearer, standard terminology for
+ *           what it actually measures (time since last reset).
+ *         • Temp/Hum line now sent bold via ntfy Markdown (X-Markdown
+ *           header), added as a new optional 5th param to sendNtfy()
+ *           (default false — every other call site unaffected, still plain
+ *           text). Only the wake/boot summary opts in.
+ *         • Degree symbol added ("25.6°C" not "25.6C"), matching the OLED
+ *           display's existing formatting.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.55 — 2026-07-24
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: Unattended OTA install, two ways to trigger it:
+ *         1. Remote request — this firmware was publish-only until now.
+ *            Added the first inbound MQTT subscription: a RETAINED message
+ *            on "<mqtt_topic>/ota/request" (payload "1"/"true"/"on").
+ *            Retained delivery means it doesn't matter the device is asleep
+ *            when the message is published — the broker holds it and
+ *            delivers it the moment this device next connects (worst case
+ *            one sleep interval later, not instant — the radio is fully off
+ *            during deep sleep and cannot be woken by an incoming packet).
+ *            Intended to be set by an ntfy "http" action button on the
+ *            update-available notification, hitting the broker's HTTP API.
+ *         2. New "Auto-install updates when found" checkbox in Settings ->
+ *            OTA Updates (persisted, "ota"/"auto_update"). When on, any
+ *            wake that confirms an update is available installs it
+ *            immediately with no confirmation step.
+ *         Both paths share handleOtaAutoOrRequested(), called from loop()
+ *         right after the existing periodic manifest check: stays awake
+ *         through the install and for ~5 min after (skips stealth-mode
+ *         short-flush for that cycle) so progress/result is visible on the
+ *         OLED and web UI before the device sleeps again, matching the
+ *         existing manual-install UX. A request with no update actually
+ *         available clears the retained flag and sends an ntfy note instead
+ *         of silently doing nothing. An install that fails leaves
+ *         otaUpdateAvailable set for retry on the next wake and sends an
+ *         ntfy alert rather than failing silently.
+ *  - FIX (latent, caught while building the above): otaDownloadUrl/
+ *         otaCrc32Expected/otaFileSize are plain globals, not RTC-persisted
+ *         — only rtcOtaAvailable survives deep sleep. On the (common) wakes
+ *         where the 24h interval guard skips a live manifest re-fetch,
+ *         otaUpdateAvailable correctly restores to true from RTC but the
+ *         URL/CRC/size needed to actually install were empty. Unattended
+ *         install now force-refetches the manifest in that specific
+ *         situation before deciding there's nothing to do. This gap existed
+ *         for manual installs too in principle, but a person looking at the
+ *         dashboard triggers a check as part of loading the page, so it was
+ *         never actually hit there.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.54 — 2026-07-24
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - CLARITY: The displayed Boot# is bootCount = nvsBootBase (lifetime hard
+ *         resets, NVS-persisted) + rtcBootOffset (sleep-wake cycles since
+ *         that last reset, RTC-memory only, zeroed on any non-sleep reset).
+ *         This is correct and intentional (avoids an NVS flash write every
+ *         2h sleep cycle), but a genuine reset event makes the combined
+ *         number drop sharply with nothing in the report explaining why --
+ *         e.g. Boot#105 -> Boot#34 after an int-wdt reset, which read like
+ *         data loss/corruption even though nothing was actually lost.
+ *         ntfy boot/wake messages, the standard-platform MQTT boot JSON, and
+ *         the web dashboard footer (via hover tooltip) now all show the
+ *         breakdown explicitly: "Boot#41 (reset#34 +7)" -- reset#34 is
+ *         nvsBootBase (lifetime resets), +7 is rtcBootOffset (cycles since).
+ *         MQTT gains a new reset_count field alongside the existing
+ *         sleep_wakes field (which was already rtcBootOffset, just not
+ *         paired with the reset count it's offset from). No change to the
+ *         underlying counting logic or NVS write frequency -- display only.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.53 — 2026-07-16
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: A genuine BROWNOUT reset previously always forced the full Active
+ *         boot path (OLED + LED on, 180s WiFiManager portal budget) because
+ *         stealthThisWake was gated on wokeByTimer alone, and a brownout
+ *         reset reports wakeup cause as undefined, not TIMER. That meant the
+ *         single most power-hungry boot path ran automatically at exactly
+ *         the moment the supply was already stressed enough to have browned
+ *         out. stealthThisWake now also goes true on a BROWNOUT reset (when
+ *         Stealth is the configured wakeDisplayMode) -- no OLED/LED, and the
+ *         v5.52 10s stealth portal timeout now actually applies to brownout
+ *         recoveries too. Side effect: the "Mode: Stealth" label in ntfy
+ *         reports (which reflects the configured setting, not runtime
+ *         behaviour) is now also true to what actually happened this boot.
+ *  - FIX: powerDownPeripherals() fired the MQTT "sleeping" status publish,
+ *         then the ntfy Sleep: HTTP POST, then began WiFi teardown
+ *         (disconnect/WIFI_OFF/esp_wifi_stop()) with under ~200ms of total
+ *         gap between the last TX and the radio-off transition. That's the
+ *         heaviest current draw of the whole cycle stacked directly against
+ *         a transition that has its own brief current cost. Added a 150ms
+ *         settle delay after the last publish/notify call and before WiFi
+ *         teardown starts, and widened the pre-esp_wifi_stop() delay from
+ *         100ms to 150ms, to reduce the odds of exactly that pattern (which
+ *         matched the "clean wake, brownout right at sleep-entry" cycles
+ *         seen in the v5.52 logs almost exactly).
+ *  - NOTE: Neither fix changes the underlying current-delivery headroom of
+ *         the battery/regulator -- a bulk capacitor across the battery input
+ *         near the regulator is still the recommended hardware fix if
+ *         brownouts continue. These changes reduce how often the firmware's
+ *         own behaviour asks for a current spike at a bad moment, and make
+ *         sure a brownout, if it happens anyway, is handled as cheaply as
+ *         possible instead of triggering the most expensive boot path.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.52 — 2026-07-14
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: Stealth timer wake that fails to reconnect (fast static-IP path AND
+ *         full WiFiManager autoConnect() both fail) no longer calls
+ *         ESP.restart(). That blind restart-on-failure was the most likely
+ *         cause of the "missing boot numbers" gaps seen in ntfy logs (e.g.
+ *         Boot#5 -> Boot#9): each failed connect attempt under a sagging
+ *         battery restarted the chip before publishBootSummary() could ever
+ *         run, so nothing was reported for those cycles even though the NVS
+ *         boot counter incremented every time.
+ *         Fix: stealth-wake connect failures now increment rtcWifiFailStreak
+ *         (RTC memory, survives the next timer wake) and log rtcLastFailMv
+ *         (raw ADC mV at the moment of failure), then go straight to
+ *         goToDeepSleep() instead of restarting. The next cycle that DOES
+ *         connect reports "WiFi fails since last report: N" in both the ntfy
+ *         message and MQTT boot JSON, so failed cycles are now visible
+ *         instead of silent. Active/button wakes and forced-portal (double
+ *         reset) behaviour is unchanged — still restarts on failure, since a
+ *         person is actually present for those.
+ *  - FIX: Config portal timeout was a flat 180 s regardless of wake type,
+ *         meaning a stealth timer wake with no saved-network connection would
+ *         sit in an unattended AP/portal state (nobody can reach it) for up
+ *         to 3 minutes, burning battery, before finally failing. Stealth
+ *         wakes now use a 10 s portal timeout; Active/button/forced-portal
+ *         wakes keep 180 s since a person may actually be configuring it.
+ *  - DEBUG: Added a consistency check between esp_reset_reason() and
+ *         rtcBootEpoch. The RTC-memory-preservation assumption documented at
+ *         the truePowerEvent check (soft resets should never clear
+ *         rtcBootEpoch) was directly contradicted by the v5.51 logs — a
+ *         software-restart boot (Boot#9) showed "On: 1s", meaning RTC memory
+ *         was disturbed despite a non-power reset reason. rtcEpochGlitchThisBoot
+ *         now flags exactly that mismatch and surfaces it in the ntfy Reset:
+ *         field and MQTT boot JSON ("rtc_epoch_glitch") instead of silently
+ *         trusting the reset-reason register — this is the clearest available
+ *         signal of a marginal power event too brief/shallow to trip the
+ *         hardware brownout detector.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.51 — 2026-07-11
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - DEBUG: esp_reset_reason() (already read by printResetReason() at boot,
+ *           previously Serial-only) is now latched into lastResetReasonStr and
+ *           surfaced in the ntfy boot message ("Reset: ...") and MQTT boot
+ *           JSON ("reset_reason"). Distinguishes a genuine BROWNOUT from a
+ *           normal cold power-on — both currently report identically as
+ *           "Wake: power-on" from esp_sleep_get_wakeup_cause() alone, which
+ *           made it impossible to tell whether "power-on" boots after a 120min
+ *           sleep were expected timer wakes gone wrong or actual brownouts.
+ *           ntfy title flags "Boot (BROWNOUT!)" distinctly so it's visible
+ *           without opening the notification body.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.50 — 2026-07-02
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - UI:  ntfy connection config (enable, what-to-send toggles, server, topic,
+ *         token) merged into the tabbed card as a 4th tab, alongside Standard/
+ *         Adafruit/Ubidots. Card renamed "MQTT Platforms" → "Publish Targets"
+ *         to accurately reflect that ntfy is HTTP-based, not MQTT protocol —
+ *         grouped by function (all are publish/notify destinations) not by
+ *         transport. ntfy tab dot synced live to the Enable ntfy checkbox
+ *         (added id='ntfy_enabled' alongside existing name attr — save handler
+ *         unaffected, still reads by name). Sensor Alerts (threshold config)
+ *         stays a standalone section below the card — it's alerting rules, not
+ *         a publish target itself.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.49 — 2026-07-02
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - UI:  Standard MQTT / Adafruit IO / Ubidots merged into a single collapsible
+ *         "MQTT Platforms" card with tabbed sub-sections (Docksentry-style).
+ *         Open/closed via header click; tabs switch panels without page reload.
+ *         Each tab shows a live status dot synced to the Platform checkboxes
+ *         above (green = enabled). Default active tab = first enabled platform.
+ *         Field names, values, and POST handling completely unchanged — this is
+ *         a pure presentation/grouping change, no server-side logic touched.
+ *         Device name, Platform picker, and Publish Interval remain standalone
+ *         sections above the card, unchanged.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.48 — 2026-06-29
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - UI:  Removed duplicate device_name from ntfy message bodies. Title already
+ *         carries "Event: device_name" — the first body line repeating it was
+ *         redundant. Fixed in 7 sends: boot/wake summary, sensor publish, sleep,
+ *         temp high/low, humidity high/low. Battery critical/low and OTA update
+ *         notifications left unchanged (their titles don't include device_name).
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.47 — 2026-06-29
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: getTotalUptime() uint32_t underflow producing "49710d" garbage.
+ *         Root cause: fast crystal accumulates ~2min drift per 120min sleep;
+ *         first NTP packet snaps time to correct value, second correction packet
+ *         can step it back slightly below rtcBootEpoch. uint32_t subtraction
+ *         wraps to ~UINT32_MAX (4,294,967,175s ≈ 49710 days).
+ *         Fix: int64_t arithmetic for the delta; if delta < 0 re-latch
+ *         rtcBootEpoch to time(nullptr) and return "syncing..." that cycle.
+ *  - FIX: Button press during stealth timer wake left OLED dark and LED off.
+ *         Root cause: attachClick() only set disableDeepSleepUntil — never
+ *         called display.displayOn() or cleared stealthThisWake. ui.init()
+ *         was already called in setup() (then displayOff()), so all UI frames
+ *         are registered; displayOn() alone is sufficient to restore display.
+ *         Fix: attachClick() and attachDoubleClick() now check stealthThisWake,
+ *         call display.displayOn() + led.Breathe() + clear stealthThisWake.
  *
  *
  *
@@ -217,7 +513,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.63"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.64"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -465,6 +761,22 @@ RTC_DATA_ATTR uint32_t rtcLastFailMv       = 0;    // raw ADC mV at the failed a
 // the clearest available signal of a marginal power event the hardware BOD
 // didn't catch. Not RTC_DATA_ATTR — recomputed fresh every boot.
 bool rtcEpochGlitchThisBoot = false;
+
+// ── Crash-loop cooldown safeguard (v5.64) ─────────────────────────────────────
+// Prompted by a real incident: a tight cluster of task-wdt/int-wdt/software-
+// restart resets (5+ within ~3 min), each one immediately retrying WiFi on
+// wake — exactly the current-hungry operation implicated in the marginal-
+// power theory this firmware has been chasing since v5.51. A pure time-
+// window detector isn't reliable here since RTC memory is sometimes the
+// very thing that glitches (see rtcEpochGlitchThisBoot) — so this counts
+// CONSECUTIVE non-power-event hard resets instead, which needs no wall-
+// clock reference at all. Deliberately does NOT count POWERON/BROWNOUT
+// resets (a real power cycle or a fresh USB reflash during development is
+// a legitimate restart, not evidence of a running crash loop) — so this
+// safeguard never interferes with active development over USB.
+RTC_DATA_ATTR uint8_t rtcConsecutiveCrashes = 0;
+#define CRASH_LOOP_THRESHOLD    3            // consecutive non-power resets before cooldown kicks in
+#define CRASH_LOOP_COOLDOWN_MS  (30UL*60UL*1000UL)  // 30 min — skips WiFi entirely, just rests
 
 // ── Static IP cache (RTC) — populated after first DHCP, reused on timer wakes
 // to skip DHCP negotiation and cut WiFi connect time from ~3s to ~400ms.
@@ -810,6 +1122,23 @@ void printResetReason() {
 // ═════════════════════════════════════════════════════════════════════════════
 void VextON()  { pinMode(Vext, OUTPUT); digitalWrite(Vext, LOW);  }
 void VextOFF() { pinMode(Vext, OUTPUT); digitalWrite(Vext, HIGH); }
+
+// v5.64: crash-loop cooldown — called instead of the normal boot path when
+// rtcConsecutiveCrashes hits CRASH_LOOP_THRESHOLD. Deliberately minimal:
+// no WiFi, no OLED, no sensor read, no MQTT/ntfy. Skips exactly the
+// operations implicated in the marginal-power crash pattern, and gives the
+// battery real rest time instead of retrying every ~2s. Button wake stays
+// enabled throughout, so physical access always overrides this immediately.
+void crashLoopCooldownSleep() {
+  Serial.printf("[CRASH-LOOP] %u consecutive non-power resets — cooling down %lu min, "
+                "skipping WiFi this cycle\n",
+                rtcConsecutiveCrashes, CRASH_LOOP_COOLDOWN_MS / 60000UL);
+  VextOFF();
+  esp_sleep_enable_timer_wakeup((uint64_t)CRASH_LOOP_COOLDOWN_MS * 1000ULL);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);  // button still wakes immediately
+  esp_deep_sleep_start();
+  // execution stops here
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // NVS — LOAD / SAVE
@@ -1513,6 +1842,10 @@ void powerUpPeripherals() {
 // about to sleep, then powers down peripherals and enters deep sleep.
 void goToDeepSleep() {
   Serial.println("[SLEEP] Entering deep sleep for " + String(deepSleepMinutes) + " min");
+  // v5.64: reaching here at all — regardless of whether WiFi/publish
+  // succeeded this cycle — means the boot didn't crash, which is genuine
+  // evidence any prior consecutive-crash streak is over.
+  rtcConsecutiveCrashes = 0;
 
   // ── 3-second sleep countdown on OLED ────────────────────────────────────
   // Skipped in Stealth timer wakes — the display is off and we don't want to
@@ -5116,6 +5449,9 @@ void setup() {
     }
     if (truePowerEvent) {
       rtcBootEpoch = 0;   // RTC truly wiped — fresh power-on tracking starts now
+      rtcConsecutiveCrashes = 0;  // legitimate fresh power cycle/reflash, not a crash streak
+    } else {
+      rtcConsecutiveCrashes++;
     }
     // else: rtcBootEpoch kept from RTC memory (OTA/crash/WDT — still valid)
     preferences.begin("sys", false);
@@ -5129,6 +5465,16 @@ void setup() {
   batteryWarnSent = false;
   if (wokeByButton) Serial.println(F("[BOOT] Woke by button"));
   if (wokeByTimer)  Serial.println(F("[BOOT] Woke by timer"));
+
+  // v5.64: crash-loop cooldown check — earliest possible point, before OLED
+  // init, WiFi, or anything else that costs current. Only a genuine hard
+  // reset (never a normal sleep-wake) can trigger this, and only after
+  // CRASH_LOOP_THRESHOLD consecutive non-power resets in a row with no
+  // successful cycle between them (see rtcConsecutiveCrashes declaration
+  // above for the full reasoning). Does not return.
+  if (!wokeFromSleep && rtcConsecutiveCrashes >= CRASH_LOOP_THRESHOLD) {
+    crashLoopCooldownSleep();
+  }
 
   // Load deep sleep config NOW — wakeDisplayMode must be known before ui.init()
   // because ui.init() sends the SSD1306 init sequence which turns the display on.

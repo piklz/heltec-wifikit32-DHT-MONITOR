@@ -1,8 +1,8 @@
 {
-  "version": "5.63",
+  "version": "5.64",
   "build_date": "2026-07-26",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.63/heltec_wifkit32v2_v563_600C9205_firmware.ino.bin",
   "size": 1466560,
   "crc32": "600C9205",
-  "changelog": "dropdown on Settings \u2192 OTA Updates Every 6/12/24/48 hours, 24h still the default"
+  "changelog": "crash-loop cooldown safeguard"
 }
