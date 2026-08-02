@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.65
+ * Version:       5.66
  * Last Updated:  2026-08-01
  * License:       MIT
  *
@@ -29,6 +29,37 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.66 — 2026-08-01
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: real config-portal boot-loop risk. The v5.52 "don't blind-restart
+ *         on WiFi connect failure" fix only applied when stealthThisWake
+ *         was true — every other wake type (button press, forced double-
+ *         reset portal, or any Active-mode-configured device, which
+ *         computes stealthThisWake=false on every wake regardless of type)
+ *         still fell through to an unconditional ESP.restart() with no
+ *         backoff and no attempt limit. If the saved SSID was genuinely
+ *         unreachable and nobody configured the portal within its timeout,
+ *         that produced exactly the loop reported: restart -> fail ->
+ *         restart -> fail, forever. (The v5.64 crash-loop cooldown would
+ *         eventually have caught this — ESP.restart() produces a non-power
+ *         reset reason, which that counter tracks — but only after ~3 full
+ *         iterations at up to 180s of AP-broadcast time each.)
+ *         Now unified: no wake type ever restarts on connect failure. Logs
+ *         the failure (rtcWifiFailStreak, same diagnostic already reported
+ *         on the next successful wake) and goes straight to sleep instead,
+ *         retrying next cycle — the same fix v5.52 already proved out for
+ *         stealth wakes, now applied everywhere.
+ *         Non-stealth wakes (button press / forced-portal) show a brief
+ *         "WiFi connect failed / Retrying next wake" OLED message before
+ *         sleeping, since a person may genuinely be standing there — the
+ *         screen previously would have just gone dark with the restart and
+ *         no explanation.
+ *         Double-reset -> forced config portal entry is untouched: this
+ *         only changes what happens if that portal ALSO times out without
+ *         being configured, not whether/how the portal opens in the first
+ *         place.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.65 — 2026-08-01
@@ -532,7 +563,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.65"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.66"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -2324,23 +2355,41 @@ void setupWiFiManager(bool forcePortal) {
   portalActive = false;
 
   if (!connected) {
-    if (stealthThisWake) {
-      // v5.52: don't blind-restart an unattended stealth wake -- that was the
-      // most likely cause of the silent boot-count gaps seen in the ntfy logs.
-      // Log a breadcrumb in RTC memory (survives the deep sleep we're about
-      // to enter) and go straight back to sleep; the next wake that DOES
-      // connect will report how many failures preceded it.
-      rtcWifiFailStreak++;
-      rtcLastFailMv = (uint32_t)analogReadMilliVolts(37);  // raw, uncalibrated -- diagnostic only
-      Serial.printf("[WiFi] Stealth connect failed (streak=%u, raw=%umV) -- sleeping, no restart\n",
-                    rtcWifiFailStreak, rtcLastFailMv);
-      wifiConnected = false;
-      goToDeepSleep();  // does not return
-      return;
+    // v5.66: was stealth-only (v5.52) -- every other wake type (button,
+    // forced double-reset portal, or any Active-mode-configured device,
+    // which computes stealthThisWake=false on EVERY wake regardless of
+    // type) fell through to a blind ESP.restart() with no backoff and no
+    // attempt limit. If the saved SSID was genuinely unreachable (router
+    // down, changed password, out of range) and nobody was there to
+    // configure the portal within its timeout, that produced a real
+    // boot-loop: restart -> fail -> restart -> fail, forever. The v5.64
+    // crash-loop cooldown would eventually have caught this (ESP.restart()
+    // produces a non-power reset reason, which that counter tracks), but
+    // only after ~3 full iterations at up to 180s of AP-broadcast time
+    // each -- a real cost paid before that backstop ever engaged. Now
+    // unified: no wake type ever restarts on connect failure, the same
+    // fix v5.52 already proved out for stealth wakes.
+    rtcWifiFailStreak++;
+    rtcLastFailMv = (uint32_t)analogReadMilliVolts(37);  // raw, uncalibrated -- diagnostic only
+    Serial.printf("[WiFi] Connect failed (streak=%u, raw=%umV) -- sleeping, no restart\n",
+                  rtcWifiFailStreak, rtcLastFailMv);
+    wifiConnected = false;
+
+    if (!stealthThisWake) {
+      // A person may genuinely be present (button wake, or someone who
+      // triggered the double-reset forced portal) -- show what happened
+      // rather than the screen just going dark with zero explanation.
+      display.clear();
+      display.setFont(ArialMT_Plain_10);
+      display.setTextAlignment(TEXT_ALIGN_CENTER);
+      display.drawString(64, 20, "WiFi connect failed");
+      display.drawString(64, 34, "Retrying next wake");
+      display.display();
+      delay(2500);
     }
-    Serial.println("[WiFi] Connection failed — restarting");
-    delay(1000);
-    ESP.restart();
+
+    goToDeepSleep();  // does not return
+    return;
   }
 
   // ── Cache IP config in RTC for fast static-IP reconnect on next timer wake ──

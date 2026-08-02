@@ -1,8 +1,8 @@
 {
-  "version": "5.65",
+  "version": "5.66",
   "build_date": "2026-08-02",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.65/heltec_wifkit32v2_v565_CD2298C5_firmware.ino.bin",
   "size": 1466848,
   "crc32": "CD2298C5",
-  "changelog": "wifi config portal no oeld display info should be now fixed"
+  "changelog": "removed ESP.restart() from the connect-failure path entirely, for every wake type."
 }
