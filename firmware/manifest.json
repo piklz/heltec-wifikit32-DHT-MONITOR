@@ -1,8 +1,8 @@
 {
-  "version": "5.64",
+  "version": "5.65",
   "build_date": "2026-08-01",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.64/heltec_wifkit32v2_v564_90C7E341_firmware.ino.bin",
   "size": 1466832,
   "crc32": "90C7E341",
-  "changelog": "crash-loop cooldown safeguard"
+  "changelog": "wifi config portal no oeld display info should be now fixed"
 }

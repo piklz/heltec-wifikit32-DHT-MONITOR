@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.64
+ * Version:       5.65
  * Last Updated:  2026-08-01
  * License:       MIT
  *
@@ -29,6 +29,25 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.65 — 2026-08-01
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: WiFi config portal (ESP32-Setup AP) could open with the OLED
+ *         still dark — same class of bug already fixed once for button-
+ *         press during stealth wake (see earlier changelog entry). If a
+ *         stealth wake's connection attempt failed and WiFiManager opened
+ *         the portal, wm.setAPCallback() registered the WIFI SETUP frame
+ *         (join instructions + 192.168.4.1) and started the LED blink, but
+ *         never called display.displayOn() — the frame was fully "active"
+ *         but the physical screen was still off from earlier in the same
+ *         boot. Applied the exact same stealthThisWake-override pattern
+ *         already used in the button-click handler.
+ *  - NOTE: no separate login/username/password step exists for this
+ *         portal — it's an open AP named "ESP32-Setup"; the OLED's two
+ *         instructions (join the AP, then browse to 192.168.4.1) are the
+ *         complete flow.
+ *
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.64 — 2026-08-01
@@ -513,7 +532,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.64"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.65"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -2275,6 +2294,16 @@ void setupWiFiManager(bool forcePortal) {
   wm.setAPCallback([](WiFiManager* wm) {
     portalActive = true;
     ui.setFrames(frames4, 4);
+    // v5.65: same class of bug already fixed once for button-press during
+    // stealth wake (see changelog) — the portal opening here can happen
+    // AFTER a stealth wake already turned the OLED off, and nothing was
+    // calling display.displayOn() to bring it back. The WIFI SETUP frame
+    // (join instructions + 192.168.4.1) was fully registered and "active"
+    // but physically invisible on the dark screen.
+    if (stealthThisWake) {
+      stealthThisWake = false;
+      display.displayOn();
+    }
     led.Blink(100, 100).Forever().Update();  // fast blink = portal open
     Serial.println(F("[WiFi] Portal open -- connect to ESP32-Setup then browse 192.168.4.1"));
   });
