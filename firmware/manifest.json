@@ -1,8 +1,8 @@
 {
   "version": "5.66",
-  "build_date": "2026-08-02",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.65/heltec_wifkit32v2_v565_CD2298C5_firmware.ino.bin",
-  "size": 1466848,
-  "crc32": "CD2298C5",
+  "build_date": "2026-08-03",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.66/heltec_wifkit32v2_v566_590A819D_firmware.ino.bin",
+  "size": 1466960,
+  "crc32": "590A819D",
   "changelog": "removed ESP.restart() from the connect-failure path entirely, for every wake type."
 }
