@@ -1,8 +1,8 @@
 {
-  "version": "5.66",
+  "version": "5.67",
   "build_date": "2026-08-03",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.66/heltec_wifkit32v2_v566_590A819D_firmware.ino.bin",
   "size": 1466960,
   "crc32": "590A819D",
-  "changelog": "removed ESP.restart() from the connect-failure path entirely, for every wake type."
+  "changelog": "oled should be displayed  ,with info -in wifi config portal mode "
 }

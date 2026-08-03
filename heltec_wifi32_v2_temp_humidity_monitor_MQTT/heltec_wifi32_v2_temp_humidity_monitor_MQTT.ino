@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.66
+ * Version:       5.67
  * Last Updated:  2026-08-01
  * License:       MIT
  *
@@ -29,6 +29,28 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.67 — 2026-08-01
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX (real root cause, supersedes v5.65's attempt): portal OLED screen
+ *         still didn't show up even with the display confirmed physically
+ *         on (stealthThisWake already false — a POWERON reset into a
+ *         double-reset-forced or connect-failure-triggered portal never
+ *         has stealthThisWake true in the first place, so the v5.65 fix's
+ *         precondition never fired). The actual cause: wm.autoConnect()/
+ *         startConfigPortal() are BLOCKING calls that don't return to the
+ *         sketch's loop() until the portal closes (up to 180s) — so
+ *         ui.update() (which OLEDDisplayUi needs called repeatedly to
+ *         actually render a registered frame) never fires during that
+ *         whole window. ui.setFrames(frames4, 4) registered the WIFI SETUP
+ *         frame but nothing ever drew it, for ANY portal entry, not just
+ *         the stealth case. Same root cause already identified for the LED
+ *         blink freezing during the portal (JLed's .Update() has the
+ *         identical dependency). Fixed by drawing the screen directly with
+ *         display.* calls the moment the AP opens, matching drawFrame4's
+ *         exact content, instead of depending on the update loop at all.
+ *
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.66 — 2026-08-01
@@ -78,7 +100,14 @@
  *         portal — it's an open AP named "ESP32-Setup"; the OLED's two
  *         instructions (join the AP, then browse to 192.168.4.1) are the
  *         complete flow.
- *
+ *  - OBSERVED, not yet fixed: the portal LED often shows steady-on rather
+ *         than blinking. Likely cause: wm.startConfigPortal()/autoConnect()
+ *         are blocking calls that run their own internal loop and never
+ *         return to the sketch's loop(), so JLed's .Update() (needed
+ *         repeatedly for the blink to actually animate) only ever fires
+ *         once, at the moment the portal opens. Proper fix would mean
+ *         switching WiFiManager to non-blocking mode — a bigger change,
+ *         left alone for now pending confirmation it's worth doing.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.64 — 2026-08-01
@@ -563,7 +592,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.66"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.67"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -2321,20 +2350,40 @@ void setupWiFiManager(bool forcePortal) {
   wm.setConfigPortalTimeout(stealthThisWake ? 10 : 180);
 
   // Called by WiFiManager the moment the AP/portal opens (both auto and forced).
-  // Switches OLED to portal-info frame and sets portalActive flag immediately.
+  // Draws the portal-info screen directly and sets portalActive immediately.
   wm.setAPCallback([](WiFiManager* wm) {
     portalActive = true;
-    ui.setFrames(frames4, 4);
-    // v5.65: same class of bug already fixed once for button-press during
-    // stealth wake (see changelog) — the portal opening here can happen
-    // AFTER a stealth wake already turned the OLED off, and nothing was
-    // calling display.displayOn() to bring it back. The WIFI SETUP frame
-    // (join instructions + 192.168.4.1) was fully registered and "active"
-    // but physically invisible on the dark screen.
+
+    // v5.66: real fix, superseding the v5.65 attempt. wm.autoConnect()/
+    // startConfigPortal() BLOCK here for the whole portal window (up to
+    // 180s) and never return to the sketch's loop() until it closes — so
+    // ui.update() (which OLEDDisplayUi needs called repeatedly to actually
+    // render a registered frame to the screen) never fires during that
+    // entire time. ui.setFrames(frames4, 4) alone registered the WIFI
+    // SETUP frame but nothing ever drew it — this affected EVERY portal
+    // entry, not just the stealth-display-was-off case v5.65 addressed
+    // (which is also still needed and kept below). Same root cause already
+    // identified for the LED blink freezing during the portal (JLed's
+    // .Update() has the identical dependency) — drawing directly here
+    // sidesteps needing the update loop at all, matching drawFrame4's
+    // exact content.
     if (stealthThisWake) {
       stealthThisWake = false;
       display.displayOn();
     }
+    display.clear();
+    display.setTextAlignment(TEXT_ALIGN_LEFT);
+    display.setFont(ArialMT_Plain_10);
+    display.drawString(0, 0, "WIFI SETUP");
+    display.drawLine(0, 12, 128, 12);
+    display.drawString(0, 14, "1. Join WiFi network:");
+    display.setFont(ArialMT_Plain_16);
+    display.drawString(4, 24, "ESP32-Setup");
+    display.setFont(ArialMT_Plain_10);
+    display.drawString(0, 42, "2. Open browser:");
+    display.drawString(4, 52, "192.168.4.1");
+    display.display();
+
     led.Blink(100, 100).Forever().Update();  // fast blink = portal open
     Serial.println(F("[WiFi] Portal open -- connect to ESP32-Setup then browse 192.168.4.1"));
   });
