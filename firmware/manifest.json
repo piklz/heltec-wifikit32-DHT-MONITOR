@@ -1,8 +1,8 @@
 {
-  "version": "5.67",
+  "version": "5.68",
   "build_date": "2026-08-03",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.67/heltec_wifkit32v2_v567_9857B9B4_firmware.ino.bin",
   "size": 1466896,
   "crc32": "9857B9B4",
-  "changelog": "oled should be displayed  ,with info -in wifi config portal mode "
+  "changelog": " Reset: int-wdt (RTC glitch?) [was: dht_read] t otarce from here on a ny glitch in code with reset/deepwake cpu overlaps"
 }
