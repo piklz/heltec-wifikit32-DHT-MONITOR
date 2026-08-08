@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.68
- * Last Updated:  2026-08-07
+ * Version:       5.69
+ * Last Updated:  2026-08-08
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,24 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.69 — 2026-08-08
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: stale double-reset flag could force the config portal open on an
+ *         ordinary single button press. clearDoubleReset() only runs after
+ *         a successful WiFi connect — any boot that crashed first
+ *         (BROWNOUT/int-wdt/etc., exactly what happens during a stressed
+ *         or low-battery stretch) left the "double reset" flag stuck set
+ *         in NVS with no expiry at all. The next non-timer wake — which
+ *         includes a genuine single button press, not just another reset —
+ *         wrongly inherited it as "reset #2 of a deliberate double-tap"
+ *         and forced the portal open. detectDoubleReset() now records
+ *         which boot count set the flag and only honors it if it was set
+ *         by the IMMEDIATELY PRECEDING hard reset; anything older is
+ *         logged as stale and ignored. Uses the already-reliable integer
+ *         boot counter rather than a wall clock, since NTP isn't synced
+ *         yet this early in boot — no new dependency, no new failure mode.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.68 — 2026-08-07
@@ -88,6 +106,36 @@
  *         would reintroduce a real panic-crash risk during long portal
  *         waits, trading cosmetic log noise for an actual regression.
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.66 — 2026-08-01
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: real config-portal boot-loop risk. The v5.52 "don't blind-restart
+ *         on WiFi connect failure" fix only applied when stealthThisWake
+ *         was true — every other wake type (button press, forced double-
+ *         reset portal, or any Active-mode-configured device, which
+ *         computes stealthThisWake=false on every wake regardless of type)
+ *         still fell through to an unconditional ESP.restart() with no
+ *         backoff and no attempt limit. If the saved SSID was genuinely
+ *         unreachable and nobody configured the portal within its timeout,
+ *         that produced exactly the loop reported: restart -> fail ->
+ *         restart -> fail, forever. (The v5.64 crash-loop cooldown would
+ *         eventually have caught this — ESP.restart() produces a non-power
+ *         reset reason, which that counter tracks — but only after ~3 full
+ *         iterations at up to 180s of AP-broadcast time each.)
+ *         Now unified: no wake type ever restarts on connect failure. Logs
+ *         the failure (rtcWifiFailStreak, same diagnostic already reported
+ *         on the next successful wake) and goes straight to sleep instead,
+ *         retrying next cycle — the same fix v5.52 already proved out for
+ *         stealth wakes, now applied everywhere.
+ *         Non-stealth wakes (button press / forced-portal) show a brief
+ *         "WiFi connect failed / Retrying next wake" OLED message before
+ *         sleeping, since a person may genuinely be standing there — the
+ *         screen previously would have just gone dark with the restart and
+ *         no explanation.
+ *         Double-reset -> forced config portal entry is untouched: this
+ *         only changes what happens if that portal ALSO times out without
+ *         being configured, not whether/how the portal opens in the first
+ *         place.
  *
  *
  *
@@ -150,7 +198,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.68"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.69"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -983,18 +1031,32 @@ void savePowerSaveConfig() {
 // ═════════════════════════════════════════════════════════════════════════════
 bool detectDoubleReset() {
   preferences.begin("drd", false);
-  unsigned long now = millis(); (void)now;  // millis() is ~0 at this point
   bool flagSet = preferences.getBool("flag", false);
-  if (flagSet) {
-    // Flag was set on previous boot — this IS a double reset
+  uint32_t flagBoot = preferences.getUInt("flag_boot", 0);
+  // v5.69: was purely "was the flag left set" with no staleness check at
+  // all — clearDoubleReset() only runs after a successful WiFi connect, so
+  // any boot that crashed first (BROWNOUT, int-wdt, etc. -- exactly what
+  // happens during a stressed/low-battery stretch) left the flag stuck
+  // set, and the NEXT non-timer wake — including an ordinary single button
+  // press, not just another reset — would wrongly inherit it as "reset #2
+  // of a double-tap" and force the portal open. Now only trusts the flag
+  // if it was set by the IMMEDIATELY PRECEDING hard reset (nvsBootBase-1);
+  // anything older is stale and ignored. Uses the already-reliable integer
+  // boot counter rather than a wall clock, since NTP isn't synced yet this
+  // early in boot.
+  bool genuine = flagSet && (nvsBootBase > 0) && (flagBoot == nvsBootBase - 1);
+  if (genuine) {
     preferences.putBool("flag", false);  // clear so triple-reset doesn't re-trigger
     preferences.end();
     Serial.println("[DRD] Double reset detected — forcing config portal");
     return true;
   } else {
-    // First reset — set flag; it will be cleared either by a second boot
-    // detecting it, or by clearDoubleReset() after normal startup completes
+    if (flagSet) {
+      Serial.printf("[DRD] Stale flag from boot #%u ignored (current #%u) -- "
+                     "not a genuine double-reset\n", flagBoot, nvsBootBase);
+    }
     preferences.putBool("flag", true);
+    preferences.putUInt("flag_boot", nvsBootBase);
     preferences.end();
     // Schedule flag clear after DRD_TIMEOUT_MS using a simple millis check in loop
     return false;
