@@ -1,8 +1,8 @@
 {
-  "version": "5.69",
+  "version": "5.70",
   "build_date": "2026-08-08",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.69/heltec_wifkit32v2_v569_0FB34709_firmware.ino.bin",
   "size": 1467568,
   "crc32": "0FB34709",
-  "changelog": "FIXED: detectDoubleReset() now records which boot set the flag and only honors it if it was the immediately preceding hard reset \u2014 anything older is logged as stale and ignored."
+  "changelog": "tweak:brownout will report Reset: BROWNOUT [was: wifi_connect] (or dht_read/ntp_sync/etc.) instead of a bare BROWNOUT with no context."
 }

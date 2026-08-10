@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.69
- * Last Updated:  2026-08-08
+ * Version:       5.70
+ * Last Updated:  2026-08-10
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,29 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.70 — 2026-08-10
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - The v5.68 crash breadcrumb ("[was: X]") deliberately skipped BOTH
+ *         POWERON and BROWNOUT, reasoning "already known to be power-
+ *         related, no extra context needed." That reasoning doesn't hold
+ *         for BROWNOUT specifically — a brownout IS "some operation's
+ *         current draw tripped a voltage sag," so knowing which operation
+ *         was in flight (wifi_connect / dht_read / ntp_sync / etc.) is
+ *         exactly the evidence needed to tell whether it's consistently
+ *         the same culprit, prompted by the Aug 8-9 brownout cluster (3 in
+ *         one night) having no breadcrumb data to look at. BROWNOUT now
+ *         captures rtcLastOp same as the non-power-event crash types.
+ *         POWERON is unchanged (still no breadcrumb — nothing meaningful
+ *         was running yet on a genuine fresh power cycle or reflash).
+ *         rtcBootEpoch wipe and rtcConsecutiveCrashes reset behavior are
+ *         UNCHANGED for both POWERON and BROWNOUT — only breadcrumb
+ *         capture was added. Worth flagging: this means a tight cluster of
+ *         BROWNOUTs still won't trigger the v5.64 crash-loop cooldown,
+ *         since each one currently resets that counter to 0 rather than
+ *         incrementing it — a real, separate gap surfaced by the same
+ *         incident, not yet addressed here.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.69 — 2026-08-08
@@ -73,69 +96,6 @@
  *         us empirically which phase it actually was, instead of guessing
  *         from reset reason and uptime alone.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.67 — 2026-08-01
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX (real root cause, supersedes v5.65's attempt): portal OLED screen
- *         still didn't show up even with the display confirmed physically
- *         on (stealthThisWake already false — a POWERON reset into a
- *         double-reset-forced or connect-failure-triggered portal never
- *         has stealthThisWake true in the first place, so the v5.65 fix's
- *         precondition never fired). The actual cause: wm.autoConnect()/
- *         startConfigPortal() are BLOCKING calls that don't return to the
- *         sketch's loop() until the portal closes (up to 180s) — so
- *         ui.update() (which OLEDDisplayUi needs called repeatedly to
- *         actually render a registered frame) never fires during that
- *         whole window. ui.setFrames(frames4, 4) registered the WIFI SETUP
- *         frame but nothing ever drew it, for ANY portal entry, not just
- *         the stealth case. Same root cause already identified for the LED
- *         blink freezing during the portal (JLed's .Update() has the
- *         identical dependency). Fixed by drawing the screen directly with
- *         display.* calls the moment the AP opens, matching drawFrame4's
- *         exact content, instead of depending on the update loop at all.
- *  - NOTE: the repeated "task_wdt: esp_task_wdt_reset(707): task not
- *         found" Serial spam during a long portal wait is very likely
- *         harmless. esp_task_wdt_add(NULL) for the main task is
- *         deliberately delayed until AFTER WiFiManager returns (existing
- *         comment: "portal can block 3 min") specifically so the 30s task
- *         watchdog can't panic-reset the chip during a legitimately-longer
- *         portal session. Something (most likely WiFiManager's own
- *         internal defensive watchdog-feed call) is resetting a
- *         subscription that doesn't exist yet by design — the call fails
- *         harmlessly. Left alone; the "obvious" fix (subscribe earlier)
- *         would reintroduce a real panic-crash risk during long portal
- *         waits, trading cosmetic log noise for an actual regression.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.66 — 2026-08-01
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: real config-portal boot-loop risk. The v5.52 "don't blind-restart
- *         on WiFi connect failure" fix only applied when stealthThisWake
- *         was true — every other wake type (button press, forced double-
- *         reset portal, or any Active-mode-configured device, which
- *         computes stealthThisWake=false on every wake regardless of type)
- *         still fell through to an unconditional ESP.restart() with no
- *         backoff and no attempt limit. If the saved SSID was genuinely
- *         unreachable and nobody configured the portal within its timeout,
- *         that produced exactly the loop reported: restart -> fail ->
- *         restart -> fail, forever. (The v5.64 crash-loop cooldown would
- *         eventually have caught this — ESP.restart() produces a non-power
- *         reset reason, which that counter tracks — but only after ~3 full
- *         iterations at up to 180s of AP-broadcast time each.)
- *         Now unified: no wake type ever restarts on connect failure. Logs
- *         the failure (rtcWifiFailStreak, same diagnostic already reported
- *         on the next successful wake) and goes straight to sleep instead,
- *         retrying next cycle — the same fix v5.52 already proved out for
- *         stealth wakes, now applied everywhere.
- *         Non-stealth wakes (button press / forced-portal) show a brief
- *         "WiFi connect failed / Retrying next wake" OLED message before
- *         sleeping, since a person may genuinely be standing there — the
- *         screen previously would have just gone dark with the restart and
- *         no explanation.
- *         Double-reset -> forced config portal entry is untouched: this
- *         only changes what happens if that portal ALSO times out without
- *         being configured, not whether/how the portal opens in the first
- *         place.
  *
  *
  *
@@ -198,7 +158,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.69"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.70"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -5220,7 +5180,13 @@ void setup() {
     if (truePowerEvent) {
       rtcBootEpoch = 0;   // RTC truly wiped — fresh power-on tracking starts now
       rtcConsecutiveCrashes = 0;  // legitimate fresh power cycle/reflash, not a crash streak
-      crashLastOp = "";           // no meaningful breadcrumb for a real power cycle
+      // v5.70: BROWNOUT now captures the breadcrumb too — a brownout IS "some
+      // operation's current draw tripped a voltage sag," so knowing WHICH
+      // operation was in flight (wifi_connect / dht_read / ntp_sync / etc.)
+      // is exactly the evidence needed to tell whether it's consistently the
+      // same culprit. Only a genuine POWERON (fresh power cycle or reflash)
+      // has no meaningful "was doing X" to report -- nothing was running yet.
+      crashLastOp = (rstReason == ESP_RST_BROWNOUT) ? String(rtcLastOp) : "";
     } else {
       rtcConsecutiveCrashes++;
       // v5.68: capture whatever was running right before THIS crash, before
