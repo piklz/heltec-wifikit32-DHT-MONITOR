@@ -1,8 +1,8 @@
 {
   "version": "5.70",
-  "build_date": "2026-08-08",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.69/heltec_wifkit32v2_v569_0FB34709_firmware.ino.bin",
-  "size": 1467568,
-  "crc32": "0FB34709",
+  "build_date": "2026-08-10",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.70/heltec_wifkit32v2_v570_AF9430D5_firmware.ino.bin",
+  "size": 1467632,
+  "crc32": "AF9430D5",
   "changelog": "tweak:brownout will report Reset: BROWNOUT [was: wifi_connect] (or dht_read/ntp_sync/etc.) instead of a bare BROWNOUT with no context."
 }
