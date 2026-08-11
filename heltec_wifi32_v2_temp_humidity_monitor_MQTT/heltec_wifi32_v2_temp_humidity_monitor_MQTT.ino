@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.70
- * Last Updated:  2026-08-10
+ * Version:       5.71
+ * Last Updated:  2026-08-11
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,30 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.71 — 2026-08-11
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - Narrowed the crash breadcrumb: three brownouts on Aug 10-11 all showed
+ *         "[was: boot]" — a wide window covering everything from the NVS
+ *         boot-counter write through OLED init through the double-reset
+ *         check, right up to the point WiFi connect itself begins. Added
+ *         4 more markOp() points to subdivide it:
+ *         • "pwrup"     — top of powerUpPeripherals(), which runs BEFORE
+ *           markOp("boot") is ever reached and does its own display.init()
+ *           + Vext power-up. A crash there previously would have shown
+ *           whatever tag survived from the PREVIOUS boot, not this one —
+ *           silently misattributed rather than just imprecise.
+ *         • "cfg_load"  — before the NVS deep-sleep-config read
+ *         • "oled_init" — right before ui.init() (the SSD1306 hardware init
+ *           proper, the standout current-draw candidate in this whole
+ *           window — a real hardware operation, not just a flash read)
+ *         • "pre_wifi"  — before the double-reset check, right up until
+ *           WiFi connect itself begins
+ *         Full chain now: pwrup -> boot -> cfg_load -> oled_init ->
+ *         pre_wifi -> wifi_connect -> ntp_sync -> dht_read -> manifest_chk.
+ *         The next brownout or crash will land in one of these narrower
+ *         windows instead of the broad "boot" catch-all.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.70 — 2026-08-10
@@ -52,49 +76,6 @@
  *         since each one currently resets that counter to 0 rather than
  *         incrementing it — a real, separate gap surfaced by the same
  *         incident, not yet addressed here.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.69 — 2026-08-08
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: stale double-reset flag could force the config portal open on an
- *         ordinary single button press. clearDoubleReset() only runs after
- *         a successful WiFi connect — any boot that crashed first
- *         (BROWNOUT/int-wdt/etc., exactly what happens during a stressed
- *         or low-battery stretch) left the "double reset" flag stuck set
- *         in NVS with no expiry at all. The next non-timer wake — which
- *         includes a genuine single button press, not just another reset —
- *         wrongly inherited it as "reset #2 of a deliberate double-tap"
- *         and forced the portal open. detectDoubleReset() now records
- *         which boot count set the flag and only honors it if it was set
- *         by the IMMEDIATELY PRECEDING hard reset; anything older is
- *         logged as stale and ignored. Uses the already-reliable integer
- *         boot counter rather than a wall clock, since NTP isn't synced
- *         yet this early in boot — no new dependency, no new failure mode.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.68 — 2026-08-07
- * ─────────────────────────────────────────────────────────────────────────────
- *  - NEW: "what was running" crash breadcrumb. ESP32 doesn't retain any
- *         context about what code was executing at the moment of an
- *         int-wdt/task-wdt/panic reset — this fills that gap cheaply. New
- *         rtcLastOp (RTC-persisted, tiny fixed buffer) is overwritten via
- *         markOp() right before each timing-sensitive early-boot operation:
- *         WiFi connect, NTP sync (both the fast static-IP and full DHCP
- *         paths), the DHT read, and the OTA manifest fetch. If a crash
- *         happens mid-operation, the tag is still whatever was written
- *         right before it, and survives into the next boot the same way
- *         everything else here already relies on RTC memory surviving soft
- *         resets. The next boot captures it into crashLastOp BEFORE its
- *         own markOp("boot") call would overwrite it, and only on an
- *         actual crash boot (never a true power event, where it's cleared
- *         instead — no meaningful breadcrumb for a real power cycle).
- *         Surfaced as "[was: dht_read]" etc. appended to the Reset: line
- *         in the wake/boot ntfy message, and as a matching crash_last_op
- *         field in the MQTT boot JSON (empty string on a non-crash boot).
- *         Turns "Reset: int-wdt (RTC glitch?)" into "Reset: int-wdt (RTC
- *         glitch?) [was: dht_read]" the next time this happens — telling
- *         us empirically which phase it actually was, instead of guessing
- *         from reset reason and uptime alone.
  *
  *
  *
@@ -158,7 +139,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.70"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.71"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1486,6 +1467,7 @@ void powerDownPeripherals() {
 // re-initialises the OLED and WiFi normally. Safe to call even if the
 // corresponding ps_* flag is false (ops are idempotent).
 void powerUpPeripherals() {
+  markOp("pwrup");
   // ── Restore CPU frequency first — everything else is faster at full speed ─
   if (ps_cpu_wake_mhz == 80 || ps_cpu_wake_mhz == 160 || ps_cpu_wake_mhz == 240)
     setCpuFrequencyMhz(ps_cpu_wake_mhz);
@@ -5220,6 +5202,7 @@ void setup() {
   // Load deep sleep config NOW — wakeDisplayMode must be known before ui.init()
   // because ui.init() sends the SSD1306 init sequence which turns the display on.
   // We need to call displayOff() immediately after for Stealth timer wakes.
+  markOp("cfg_load");
   loadDeepSleepConfig();
   // v5.53: a brownout mid-cycle is virtually never a person physically at the
   // device -- it's a stealth timer wake that got interrupted. Previously this
@@ -5239,6 +5222,7 @@ void setup() {
   ui.setIndicatorDirection(LEFT_RIGHT);
   ui.setFrameAnimation(SLIDE_LEFT);
   ui.setFrames(frames3, 3);
+  markOp("oled_init");
   ui.init();
   ui.setOverlays(overlays, 1);  // OTA-available badge overlay, drawn on every frame
   // ui.init() enables the display as part of SSD1306 hardware init.
@@ -5321,6 +5305,7 @@ void setup() {
   // ── Double reset check — BEFORE WiFiManager ────────────────────────────────
   // SKIP on timer wakes — deep sleep does a full chip reset on every wake, so
   // DRD would trigger on every second timer wake and open the config portal.
+  markOp("pre_wifi");
   bool forcePortal = (!wokeByTimer) && detectDoubleReset();
 
   // ── WiFiManager (blocks here until connected or portal times out) ──────────
