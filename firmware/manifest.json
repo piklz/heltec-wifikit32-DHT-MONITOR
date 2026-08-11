@@ -1,8 +1,8 @@
 {
   "version": "5.71",
-  "build_date": "2026-08-08",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.69/heltec_wifkit32v2_v569_0FB34709_firmware.ino.bin",
-  "size": 1467568,
-  "crc32": "0FB34709",
+  "build_date": "2026-08-11",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.71/heltec_wifkit32v2_v571_3EC8A168_firmware.ino.bin",
+  "size": 1467712,
+  "crc32": "3EC8A168",
   "changelog": "tweak:brownout testing with more labels "
 }
