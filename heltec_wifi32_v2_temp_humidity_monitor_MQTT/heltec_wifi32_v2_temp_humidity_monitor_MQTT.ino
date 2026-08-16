@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.71
- * Last Updated:  2026-08-11
+ * Version:       5.72
+ * Last Updated:  2026-08-14
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,33 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.72 — 2026-08-14
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: real gap in the v5.68 crash breadcrumb, found in practice on
+ *         Aug 14 — a crash followed immediately by a WiFi/router outage on
+ *         the very next wake meant the breadcrumb was captured but never
+ *         reported, and was gone forever the moment the chip slept again
+ *         (crashLastOp is a plain variable, alive for exactly one boot).
+ *         New RTC-persisted pending-report state (rtcUnreportedCrashes,
+ *         rtcPendingResetReason, rtcPendingLastOp, rtcPendingEpochGlitch —
+ *         fixed char buffers, not String, since RTC memory preserves a
+ *         String's internal pointer/length bytes across a reset but NOT
+ *         the heap data those pointers reference) now survives across as
+ *         many failed-connect cycles as it takes until a wake finally
+ *         succeeds. Fed on every genuine crash (BROWNOUT or non-power-
+ *         event, same exclusion already used for crashLastOp — a real
+ *         POWERON still has no meaningful breadcrumb).
+ *         Surfaces as "⚠️ N unreported crash(es) since last report — most
+ *         recent: X [was: Y]" in the wake/boot ntfy message — shown on a
+ *         clean wake that follows one or more silent crashes, or on a
+ *         crash-boot where earlier crashes ALSO happened before this one
+ *         (a crash-boot reporting only itself already shows that via the
+ *         normal Reset: line, so no redundant note there). Matching
+ *         unreported_crashes field added to the MQTT boot JSON. Cleared
+ *         the same way rtcWifiFailStreak already is — once a boot reaches
+ *         the point of actually attempting a report.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.71 — 2026-08-11
@@ -53,29 +80,6 @@
  *         pre_wifi -> wifi_connect -> ntp_sync -> dht_read -> manifest_chk.
  *         The next brownout or crash will land in one of these narrower
  *         windows instead of the broad "boot" catch-all.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.70 — 2026-08-10
- * ─────────────────────────────────────────────────────────────────────────────
- *  - The v5.68 crash breadcrumb ("[was: X]") deliberately skipped BOTH
- *         POWERON and BROWNOUT, reasoning "already known to be power-
- *         related, no extra context needed." That reasoning doesn't hold
- *         for BROWNOUT specifically — a brownout IS "some operation's
- *         current draw tripped a voltage sag," so knowing which operation
- *         was in flight (wifi_connect / dht_read / ntp_sync / etc.) is
- *         exactly the evidence needed to tell whether it's consistently
- *         the same culprit, prompted by the Aug 8-9 brownout cluster (3 in
- *         one night) having no breadcrumb data to look at. BROWNOUT now
- *         captures rtcLastOp same as the non-power-event crash types.
- *         POWERON is unchanged (still no breadcrumb — nothing meaningful
- *         was running yet on a genuine fresh power cycle or reflash).
- *         rtcBootEpoch wipe and rtcConsecutiveCrashes reset behavior are
- *         UNCHANGED for both POWERON and BROWNOUT — only breadcrumb
- *         capture was added. Worth flagging: this means a tight cluster of
- *         BROWNOUTs still won't trigger the v5.64 crash-loop cooldown,
- *         since each one currently resets that counter to 0 rather than
- *         incrementing it — a real, separate gap surfaced by the same
- *         incident, not yet addressed here.
  *
  *
  *
@@ -139,7 +143,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.71"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.72"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -419,6 +423,23 @@ inline void markOp(const char* op) {
   strncpy(rtcLastOp, op, sizeof(rtcLastOp) - 1);
   rtcLastOp[sizeof(rtcLastOp) - 1] = '\0';
 }
+
+// v5.72: persistent pending-crash report. Gap found in practice: crashLastOp
+// above is a PLAIN variable, only alive for the one boot immediately after a
+// crash. If THAT boot's own WiFi connect also fails (e.g. a router outage
+// overlapping with an unrelated crash), the report never goes out and the
+// breadcrumb is gone forever the moment the chip sleeps again — even though
+// a later wake eventually connects fine. These RTC-persisted fields instead
+// survive across as many failed-connect cycles as it takes until a wake
+// finally succeeds, so the eventual report can still say what happened.
+// Fixed-size char buffers, not String — RTC memory preserves the raw bytes
+// of a String's internal pointer/length fields across a reset, but NOT the
+// heap memory those pointers reference, so a String placed here would be a
+// dangling pointer on the next boot. Same reasoning as rtcLastOp above.
+RTC_DATA_ATTR uint16_t rtcUnreportedCrashes      = 0;   // crashes since last successful ntfy report
+RTC_DATA_ATTR char     rtcPendingResetReason[24] = "";  // most recent unreported crash's reset reason
+RTC_DATA_ATTR char     rtcPendingLastOp[16]      = "";  // most recent unreported crash's breadcrumb
+RTC_DATA_ATTR bool     rtcPendingEpochGlitch     = false;
 
 // ── Static IP cache (RTC) — populated after first DHCP, reused on timer wakes
 // to skip DHCP negotiation and cut WiFi connect time from ~3s to ~400ms.
@@ -2289,6 +2310,7 @@ void publishBootSummary() {
     doc["reset_reason"] = lastResetReasonStr;
     doc["rtc_epoch_glitch"] = rtcEpochGlitchThisBoot;
     doc["crash_last_op"] = crashLastOp;   // "" when this boot wasn't a crash
+    doc["unreported_crashes"] = rtcUnreportedCrashes;  // includes this boot's own, if any
     doc["wifi_fails_since_last_report"] = rtcWifiFailStreak;
     doc["wake_mode"]    = (wakeDisplayMode == 0) ? "stealth" : "active";
     doc["ip"]           = WiFi.localIP().toString();
@@ -2387,6 +2409,18 @@ void publishBootSummary() {
       msg += "\n📶 WiFi fails since last report: " + String(rtcWifiFailStreak) +
              "  (last raw: " + String(rtcLastFailMv) + "mV)";
     }
+    // v5.72: surface any crash(es) that happened but never got reported —
+    // either this is a clean wake following one or more silent crashes
+    // (lastResetReasonStr=="deepsleep-wake", rtcUnreportedCrashes > 0), or
+    // this boot is itself a crash but wasn't the ONLY one pending
+    // (rtcUnreportedCrashes > 1). A crash-boot with count==1 already shows
+    // its own info via the normal Reset: line above, so no redundant note.
+    if (rtcUnreportedCrashes > 0 && (lastResetReasonStr == "deepsleep-wake" || rtcUnreportedCrashes > 1)) {
+      msg += "\n⚠️ " + String(rtcUnreportedCrashes) + " unreported crash(es) since last report — most recent: " +
+             String(rtcPendingResetReason) +
+             (rtcPendingEpochGlitch ? " (RTC glitch?)" : "") +
+             (strlen(rtcPendingLastOp) ? " [was: " + String(rtcPendingLastOp) + "]" : "");
+    }
     int est = estSleepsRemaining();
     if (est >= 0) msg += "\n😴 ~" + String(est) + " sleeps remaining";
     sendNtfy(device_name + " · " + ntfyTitle, msg, 2, wakeIcon + "," + srcIcon, true);
@@ -2400,6 +2434,12 @@ void publishBootSummary() {
   // chance to report (regardless of which platforms are enabled) -- clear
   // the streak so it reflects failures since the last successful boot only.
   rtcWifiFailStreak = 0;
+  // v5.72: same reasoning — clear the pending-crash state now that it's
+  // had a real chance to be included in a report.
+  rtcUnreportedCrashes    = 0;
+  rtcPendingResetReason[0] = '\0';
+  rtcPendingLastOp[0]      = '\0';
+  rtcPendingEpochGlitch    = false;
 
   Serial.println("[BOOT] Summary published");
 }
@@ -5169,11 +5209,27 @@ void setup() {
       // same culprit. Only a genuine POWERON (fresh power cycle or reflash)
       // has no meaningful "was doing X" to report -- nothing was running yet.
       crashLastOp = (rstReason == ESP_RST_BROWNOUT) ? String(rtcLastOp) : "";
+      // v5.72: feed the persistent pending-report state for BROWNOUT too —
+      // same reasoning, only excluded for genuine POWERON.
+      if (rstReason == ESP_RST_BROWNOUT) {
+        rtcUnreportedCrashes++;
+        lastResetReasonStr.toCharArray(rtcPendingResetReason, sizeof(rtcPendingResetReason));
+        strncpy(rtcPendingLastOp, rtcLastOp, sizeof(rtcPendingLastOp) - 1);
+        rtcPendingLastOp[sizeof(rtcPendingLastOp) - 1] = '\0';
+        rtcPendingEpochGlitch = rtcEpochGlitchThisBoot;
+      }
     } else {
       rtcConsecutiveCrashes++;
       // v5.68: capture whatever was running right before THIS crash, before
       // markOp() below (or anything later this boot) overwrites the tag.
       crashLastOp = String(rtcLastOp);
+      // v5.72: also feed the persistent pending-report state, so this
+      // survives even if THIS boot's own report never goes out.
+      rtcUnreportedCrashes++;
+      lastResetReasonStr.toCharArray(rtcPendingResetReason, sizeof(rtcPendingResetReason));
+      strncpy(rtcPendingLastOp, rtcLastOp, sizeof(rtcPendingLastOp) - 1);
+      rtcPendingLastOp[sizeof(rtcPendingLastOp) - 1] = '\0';
+      rtcPendingEpochGlitch = rtcEpochGlitchThisBoot;
     }
     markOp("boot");  // reset the tag for this boot's own tracking
     // else: rtcBootEpoch kept from RTC memory (OTA/crash/WDT — still valid)
