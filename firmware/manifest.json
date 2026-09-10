@@ -1,8 +1,8 @@
 {
   "version": "5.73",
-  "build_date": "2026-08-16",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.72/heltec_wifkit32v2_v572_48B8EA12_firmware.ino.bin",
-  "size": 1468736,
-  "crc32": "48B8EA12",
+  "build_date": "2026-09-10",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.73/heltec_wifkit32v2_v573_243C0B51_firmware.ino.bin",
+  "size": 1468768,
+  "crc32": "243C0B51",
   "changelog": "tweak:Split the pwrup breadcrumb into two finer points  "
 }
