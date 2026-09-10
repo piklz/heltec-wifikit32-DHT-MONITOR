@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.72
- * Last Updated:  2026-08-14
+ * Version:       5.73
+ * Last Updated:  2026-09-08
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,29 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.73 — 2026-09-08
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - Split the "pwrup" breadcrumb into two finer points, prompted by the
+ *         Sep 6 crash landing there — a real payoff of the v5.71 narrowing
+ *         (20-day, 248-wake clean streak on reset #8, then an int-wdt
+ *         landing squarely in powerUpPeripherals(), which the old wide
+ *         "boot" tag could never have pinpointed this precisely). "pwrup"
+ *         alone still covered two genuinely different current-draw
+ *         candidates: the Vext rail switching on (inrush as its
+ *         capacitors charge, feeding both OLED and DHT), and the first
+ *         display.init() call (I2C/SPI activity + SSD1306 charge-pump
+ *         activation) — different signatures, same tag. Now: "vext_on"
+ *         right after the Vext rail stabilises, "pwrup_oled" right before
+ *         that first display.init(). Full early-boot chain now: pwrup ->
+ *         vext_on -> pwrup_oled -> boot -> cfg_load -> oled_init ->
+ *         pre_wifi -> wifi_connect -> ntp_sync -> dht_read -> manifest_chk.
+ *         If the next crash in this window lands on one specifically,
+ *         that's close to a confirmed cause rather than a hypothesis —
+ *         vext_on points at the power rail itself (reinforcing the
+ *         capacitor fix); pwrup_oled would point at the display's init
+ *         sequence specifically, a different and more targeted mitigation.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.72 — 2026-08-14
@@ -57,29 +80,6 @@
  *         the same way rtcWifiFailStreak already is — once a boot reaches
  *         the point of actually attempting a report.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.71 — 2026-08-11
- * ─────────────────────────────────────────────────────────────────────────────
- *  - Narrowed the crash breadcrumb: three brownouts on Aug 10-11 all showed
- *         "[was: boot]" — a wide window covering everything from the NVS
- *         boot-counter write through OLED init through the double-reset
- *         check, right up to the point WiFi connect itself begins. Added
- *         4 more markOp() points to subdivide it:
- *         • "pwrup"     — top of powerUpPeripherals(), which runs BEFORE
- *           markOp("boot") is ever reached and does its own display.init()
- *           + Vext power-up. A crash there previously would have shown
- *           whatever tag survived from the PREVIOUS boot, not this one —
- *           silently misattributed rather than just imprecise.
- *         • "cfg_load"  — before the NVS deep-sleep-config read
- *         • "oled_init" — right before ui.init() (the SSD1306 hardware init
- *           proper, the standout current-draw candidate in this whole
- *           window — a real hardware operation, not just a flash read)
- *         • "pre_wifi"  — before the double-reset check, right up until
- *           WiFi connect itself begins
- *         Full chain now: pwrup -> boot -> cfg_load -> oled_init ->
- *         pre_wifi -> wifi_connect -> ntp_sync -> dht_read -> manifest_chk.
- *         The next brownout or crash will land in one of these narrower
- *         windows instead of the broad "boot" catch-all.
  *
  *
  *
@@ -143,7 +143,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.72"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.73"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1497,6 +1497,7 @@ void powerUpPeripherals() {
   Serial.printf("[PWRUP] CPU -> %d MHz\n", getCpuFrequencyMhz());
 
   // ── Vext rail on — OLED and Vext peripherals need power before init ───────
+  markOp("vext_on");
   VextON();
   delay(20);  // allow rail to stabilise
 
@@ -1508,6 +1509,7 @@ void powerUpPeripherals() {
   // SSD1306Wire needs init() + displayOn() every time Vext was cut or on power-on.
   // ui.init() calls display.init() internally, but displayOn() is separate —
   // without it the panel stays blank even though data is being written to the buffer.
+  markOp("pwrup_oled");
   display.init();
   display.clear();
   // displayOn() called later in setup() after stealthThisWake is known
