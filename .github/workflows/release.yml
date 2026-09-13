@@ -249,7 +249,20 @@ jobs:
           # Pull any changes that happened remotely during the compilation process
           git pull --rebase origin main
 
-          git push origin main
+          # GitHub can occasionally reject an otherwise valid ref update with
+          # a transient "fatal error in commit_refs" response.
+          for attempt in 1 2 3 4 5; do
+            if git push origin main; then
+              echo "Manifest push succeeded on attempt $attempt."
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "Manifest push failed after $attempt attempts."
+              exit 1
+            fi
+            echo "Manifest push failed on attempt $attempt; retrying in 10 seconds."
+            sleep 10
+          done
 
       - name: Generate Automated GitHub Release
         uses: softprops/action-gh-release@v2
