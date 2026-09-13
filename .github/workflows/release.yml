@@ -3,7 +3,9 @@ name: End-to-End Automated Firmware and Manifest Sync
 on:
   push:
     paths:
-      - 'firmware/manifest.json' # Triggers automatically on any code push/edit
+      - 'firmware/manifest.json'
+      - '**/*.ino'
+      - '**/partitions.csv'
 
   # Adds the dropdown selection menu and text inputs on the GitHub web UI
   workflow_dispatch:
@@ -12,7 +14,10 @@ on:
         description: 'Select Build Preset Target'
         required: true
         default: 'GitHub-Cloud'
-        type: environment # Links dropdown choices to GitHub Environments
+        type: choice
+        options:
+          - GitHub-Cloud
+          - Local-Pi5
       manual_version:
         description: 'New Version (leave blank to use existing manifest version)'
         required: false
