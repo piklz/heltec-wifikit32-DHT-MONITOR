@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.73
- * Last Updated:  2026-09-08
+ * Version:       5.74
+ * Last Updated:  2026-09-12
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,36 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.74 — 2026-09-12
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: real, evidence-driven fix for the "pwrup_oled" brownouts — 5
+ *         separate BROWNOUTs (Sep 10-12, spanning 10-35% battery) ALL
+ *         landed on this exact tag after the v5.73 split. Turned out the
+ *         OLED was being fully hardware-initialised TWICE on every single
+ *         boot: once in powerUpPeripherals() (display.init(), the
+ *         "pwrup_oled" tag), and again moments later via ui.init(), which
+ *         runs UNCONDITIONALLY regardless of stealth mode and does a full
+ *         display.init() internally anyway. The first call was pure waste
+ *         — identical work, zero benefit, doubling exposure to the exact
+ *         current-inrush moment (SSD1306 charge-pump activation) those 5
+ *         brownouts pinpointed. Removed it; ui.init() alone now handles
+ *         OLED init, tagged "oled_init" as before. Widened the Vext
+ *         settle delay from 20ms to 50ms, since ui.init()'s draw is now
+ *         the sole remaining event on that rail — same "don't stack the
+ *         two heaviest draws back to back" principle as the v5.53 sleep-
+ *         entry fix. display.clear() added back explicitly alongside the
+ *         remaining ui.init() call, since the removed display.init() was
+ *         also doing that.
+ *         Considered and rejected: skipping ui.init() itself for stealth
+ *         wakes (would eliminate the spike entirely on stealth cycles,
+ *         where the screen is never shown) — the button-press stealth
+ *         override elsewhere assumes ui.init() already configured the UI
+ *         library's frame state before calling displayOn() alone; skipping
+ *         it outright risks a blank/broken screen if that override fires
+ *         mid-cycle. Worth revisiting later with more care if this fix
+ *         alone doesn't fully resolve the pattern.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.73 — 2026-09-08
@@ -52,34 +82,6 @@
  *         vext_on points at the power rail itself (reinforcing the
  *         capacitor fix); pwrup_oled would point at the display's init
  *         sequence specifically, a different and more targeted mitigation.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.72 — 2026-08-14
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: real gap in the v5.68 crash breadcrumb, found in practice on
- *         Aug 14 — a crash followed immediately by a WiFi/router outage on
- *         the very next wake meant the breadcrumb was captured but never
- *         reported, and was gone forever the moment the chip slept again
- *         (crashLastOp is a plain variable, alive for exactly one boot).
- *         New RTC-persisted pending-report state (rtcUnreportedCrashes,
- *         rtcPendingResetReason, rtcPendingLastOp, rtcPendingEpochGlitch —
- *         fixed char buffers, not String, since RTC memory preserves a
- *         String's internal pointer/length bytes across a reset but NOT
- *         the heap data those pointers reference) now survives across as
- *         many failed-connect cycles as it takes until a wake finally
- *         succeeds. Fed on every genuine crash (BROWNOUT or non-power-
- *         event, same exclusion already used for crashLastOp — a real
- *         POWERON still has no meaningful breadcrumb).
- *         Surfaces as "⚠️ N unreported crash(es) since last report — most
- *         recent: X [was: Y]" in the wake/boot ntfy message — shown on a
- *         clean wake that follows one or more silent crashes, or on a
- *         crash-boot where earlier crashes ALSO happened before this one
- *         (a crash-boot reporting only itself already shows that via the
- *         normal Reset: line, so no redundant note there). Matching
- *         unreported_crashes field added to the MQTT boot JSON. Cleared
- *         the same way rtcWifiFailStreak already is — once a boot reaches
- *         the point of actually attempting a report.
- *
  *
  *
  *
@@ -143,7 +145,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.73"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.74"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -1499,20 +1501,33 @@ void powerUpPeripherals() {
   // ── Vext rail on — OLED and Vext peripherals need power before init ───────
   markOp("vext_on");
   VextON();
-  delay(20);  // allow rail to stabilise
+  // v5.74: widened from 20ms. ui.init() (unconditional, later in setup())
+  // is now the ONLY OLED init this boot does — see below — so it's the
+  // sole remaining current-draw event on this rail. Give it a bit more
+  // recovery time before that happens, same "don't stack the two heaviest
+  // draws back to back" principle as the v5.53 sleep-entry fix.
+  delay(50);
 
   // ── DHT pin: restore to normal output-capable mode (DHT lib sets it) ──────
   // Just ensure it's not left floating — DHT.begin() in setup() handles the rest
   pinMode(DHT_PIN, INPUT_PULLUP);
 
-  // ── OLED: re-initialise and turn on after sleep or first boot ─────────────
-  // SSD1306Wire needs init() + displayOn() every time Vext was cut or on power-on.
-  // ui.init() calls display.init() internally, but displayOn() is separate —
-  // without it the panel stays blank even though data is being written to the buffer.
-  markOp("pwrup_oled");
-  display.init();
-  display.clear();
-  // displayOn() called later in setup() after stealthThisWake is known
+  // v5.74: REMOVED — was display.init(); display.clear(); here, tagged
+  // "pwrup_oled". Real finding from 5 separate BROWNOUTs (Sep 10-12,
+  // 10-35% battery), ALL landing on this exact tag: the SSD1306's charge-
+  // pump activation during init is a genuine current-inrush moment for
+  // this display, and it was happening TWICE every single boot — once
+  // here, then again via ui.init() a bit later in setup(), which runs
+  // UNCONDITIONALLY regardless of stealth mode and calls display.init()
+  // internally anyway (see its own comment: "ui.init() enables the
+  // display as part of SSD1306 hardware init"). This first call was pure
+  // waste — identical work, zero benefit, doubling exposure to the exact
+  // spike five brownouts just pinpointed. ui.init() alone now handles it,
+  // tagged "oled_init". Skipping ui.init() ITSELF for stealth wakes was
+  // considered and rejected: the button-press stealth override elsewhere
+  // assumes ui.init() already configured the UI library's frame state and
+  // only calls displayOn() afterward — never running ui.init() at all
+  // this boot could leave that override showing a blank/broken screen.
 
   Serial.println("[PWRUP] Peripherals restored");
 }
@@ -5282,6 +5297,7 @@ void setup() {
   ui.setFrames(frames3, 3);
   markOp("oled_init");
   ui.init();
+  display.clear();  // v5.74: was previously cleared by the now-removed early display.init() in powerUpPeripherals()
   ui.setOverlays(overlays, 1);  // OTA-available badge overlay, drawn on every frame
   // ui.init() enables the display as part of SSD1306 hardware init.
   // Kill it immediately if this is a Stealth timer wake.

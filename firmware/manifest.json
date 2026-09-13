@@ -1,8 +1,8 @@
 {
-  "version": "5.73",
+  "version": "5.74",
   "build_date": "2026-09-10",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.73/heltec_wifkit32v2_v573_243C0B51_firmware.ino.bin",
   "size": 1468768,
   "crc32": "243C0B51",
-  "changelog": "tweak:Split the pwrup breadcrumb into two finer points  "
+  "changelog": "tweak:OLED was being fully hardware-initialised TWICE on every single   "
 }
