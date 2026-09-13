@@ -1,8 +1,8 @@
 {
   "version": "5.74",
-  "build_date": "2026-09-10",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.73/heltec_wifkit32v2_v573_243C0B51_firmware.ino.bin",
-  "size": 1468768,
-  "crc32": "243C0B51",
+  "build_date": "2026-09-13",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.74/heltec_wifkit32v2_v574_89D91D8A_firmware.ino.bin",
+  "size": 1468736,
+  "crc32": "89D91D8A",
   "changelog": "tweak:OLED was being fully hardware-initialised TWICE on every single   "
 }
