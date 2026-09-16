@@ -1,8 +1,8 @@
 {
   "version": "5.76",
-  "build_date": "2026-09-13",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.74/heltec_wifkit32v2_v574_02A7D723_firmware.ino.bin",
-  "size": 1468736,
-  "crc32": "02A7D723",
+  "build_date": "2026-09-16",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.76/heltec_wifkit32v2_v576_25EE3857_firmware.ino.bin",
+  "size": 1468864,
+  "crc32": "25EE3857",
   "changelog": "tweak:reordered powerUpPeripherals() so Vext turns on BEFORE the CPU frequency ramp-up, not after."
 }
