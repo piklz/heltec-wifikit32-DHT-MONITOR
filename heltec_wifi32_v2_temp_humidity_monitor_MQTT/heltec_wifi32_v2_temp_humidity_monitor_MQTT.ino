@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.74
- * Last Updated:  2026-09-12
+ * Version:       5.76
+ * Last Updated:  2026-09-16
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,80 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.76 — 2026-09-16
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - TRY: reordered powerUpPeripherals() so Vext turns on BEFORE the CPU
+ *         frequency ramp-up, not after. Prompted by Sep 16 evidence: 6
+ *         consecutive wakes, ALL "BROWNOUT [was: vext_on]", spanning a
+ *         30-70% battery range — no longer intermittent or low-charge-
+ *         specific, now 100% reproducible. The v5.74 settle-delay widen
+ *         (20ms->50ms) alone did not stop it. Previously the CPU ramp (up
+ *         to 240MHz, its most current-hungry mode) happened immediately
+ *         BEFORE Vext turned on — meaning if the chip's default boot
+ *         frequency is lower than the configured wake speed, that ramp's
+ *         own current step was landing at the exact same instant as
+ *         Vext's inrush, stacking two of the heaviest draws in the whole
+ *         boot sequence right on top of each other. Same principle as the
+ *         proven v5.53 sleep-entry fix, applied here for the first time.
+ *         Honest caveat: whether this actually helps depends on the
+ *         board's configured default CPU frequency (an Arduino IDE/
+ *         board-package setting, not visible from this source file) — if
+ *         the chip already boots at the same frequency setCpuFrequencyMhz()
+ *         would set here, this reorder changes nothing, since there'd be
+ *         no real ramp-transition current draw to move out of the way.
+ *         Worth trying since it's low-risk regardless. If "vext_on"
+ *         brownouts persist at this rate after this change, that's a
+ *         strong signal software has been narrowed about as far as it
+ *         reasonably can here, and the bulk capacitor across the battery
+ *         input (recommended since the very start of this investigation,
+ *         still not yet applied) is the fix actually needed next.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.75 — 2026-09-15
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: BROWNOUT no longer resets the crash-loop counter (rtcConsecutiveCrashes)
+ *         — it now increments it the same as the other crash-type resets.
+ *         Found in practice on Sep 15: 19 consecutive BROWNOUTs in ~20
+ *         minutes, none of which could ever have tripped the v5.64 cooldown
+ *         under the old behavior, no matter how many happened back to
+ *         back, since BROWNOUT was treated as "legitimate restart" same as
+ *         POWERON. Only a genuine POWERON (real power cycle or reflash)
+ *         still resets the counter now — that's the only case in this
+ *         branch that's actually a fresh restart rather than evidence of
+ *         a running problem. At CRASH_LOOP_THRESHOLD (3), this would have
+ *         caught the Sep 15 loop after 3 brownouts instead of running
+ *         unchecked for 19.
+ *  - FIX (found during this round's full re-audit, not previously
+ *         reported): a deliberate ESP.restart() right after a successful
+ *         OTA install was being counted as a crash — every non-power-event
+ *         reset fed both the crash-loop counter AND the "unreported
+ *         crash" report, with no way to tell a genuine post-install
+ *         reboot apart from an actual int-wdt/task-wdt/software-restart
+ *         crash. That meant pushing a few firmware updates in quick
+ *         succession (normal during active development — this whole
+ *         project has done exactly that constantly) could trip the
+ *         crash-loop cooldown and skip WiFi for no real reason, and would
+ *         also have shown a misleading "⚠️ unreported crash" note on the
+ *         next report for something that wasn't a crash at all. Now peeks
+ *         at the "updated" NVS flag (read-only, doesn't consume it — the
+ *         existing post-OTA splash/ntfy code still needs to) to exclude a
+ *         genuine post-install reboot from all crash attribution.
+ *  - Stale comment/log text in crashLoopCooldownSleep() fixed — said
+ *         "consecutive non-power resets", no longer accurate now that
+ *         BROWNOUT feeds the same counter.
+ *  - Audited: DHT retry timing (readSensor, worst-case 4s, reasonable),
+ *         battery ADC averaging (already 16-sample with min/max variance
+ *         tracking and two-pass USB/battery calibration — solid, no
+ *         change needed), and crashLoopCooldownSleep()'s interaction with
+ *         VextOFF()/powerUpPeripherals() ordering (correct — cooldown
+ *         always runs after powerUpPeripherals() already turned Vext on,
+ *         so VextOFF() correctly undoes it). One item noted but NOT
+ *         fixed this round: rtcWifiFailStreak is purely a diagnostic
+ *         counter — no adaptive sleep-interval backoff reads it yet, so a
+ *         genuine multi-cycle WiFi outage still retries at the normal
+ *         cadence rather than backing off. Worth considering separately.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.74 — 2026-09-12
@@ -59,31 +133,6 @@
  *         it outright risks a blank/broken screen if that override fires
  *         mid-cycle. Worth revisiting later with more care if this fix
  *         alone doesn't fully resolve the pattern.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.73 — 2026-09-08
- * ─────────────────────────────────────────────────────────────────────────────
- *  - Split the "pwrup" breadcrumb into two finer points, prompted by the
- *         Sep 6 crash landing there — a real payoff of the v5.71 narrowing
- *         (20-day, 248-wake clean streak on reset #8, then an int-wdt
- *         landing squarely in powerUpPeripherals(), which the old wide
- *         "boot" tag could never have pinpointed this precisely). "pwrup"
- *         alone still covered two genuinely different current-draw
- *         candidates: the Vext rail switching on (inrush as its
- *         capacitors charge, feeding both OLED and DHT), and the first
- *         display.init() call (I2C/SPI activity + SSD1306 charge-pump
- *         activation) — different signatures, same tag. Now: "vext_on"
- *         right after the Vext rail stabilises, "pwrup_oled" right before
- *         that first display.init(). Full early-boot chain now: pwrup ->
- *         vext_on -> pwrup_oled -> boot -> cfg_load -> oled_init ->
- *         pre_wifi -> wifi_connect -> ntp_sync -> dht_read -> manifest_chk.
- *         If the next crash in this window lands on one specifically,
- *         that's close to a confirmed cause rather than a hypothesis —
- *         vext_on points at the power rail itself (reinforcing the
- *         capacitor fix); pwrup_oled would point at the display's init
- *         sequence specifically, a different and more targeted mitigation.
- *
- *
  *
  *
  */
@@ -145,7 +194,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.74"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.76"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -794,9 +843,12 @@ void VextOFF() { pinMode(Vext, OUTPUT); digitalWrite(Vext, HIGH); }
 // operations implicated in the marginal-power crash pattern, and gives the
 // battery real rest time instead of retrying every ~2s. Button wake stays
 // enabled throughout, so physical access always overrides this immediately.
+// v5.75: BROWNOUT now feeds rtcConsecutiveCrashes too (previously excluded,
+// which let a run of brownouts loop indefinitely with no cooldown ever
+// engaging — see the Sep 15 changelog entry).
 void crashLoopCooldownSleep() {
-  Serial.printf("[CRASH-LOOP] %u consecutive non-power resets — cooling down %lu min, "
-                "skipping WiFi this cycle\n",
+  Serial.printf("[CRASH-LOOP] %u consecutive crash-type resets (brownout included) — "
+                "cooling down %lu min, skipping WiFi this cycle\n",
                 rtcConsecutiveCrashes, CRASH_LOOP_COOLDOWN_MS / 60000UL);
   VextOFF();
   esp_sleep_enable_timer_wakeup((uint64_t)CRASH_LOOP_COOLDOWN_MS * 1000ULL);
@@ -1491,22 +1543,30 @@ void powerDownPeripherals() {
 // corresponding ps_* flag is false (ops are idempotent).
 void powerUpPeripherals() {
   markOp("pwrup");
-  // ── Restore CPU frequency first — everything else is faster at full speed ─
+
+  // ── Vext rail on FIRST — before any CPU frequency ramp-up ──────────────────
+  // v5.76: reordered. Previously the CPU frequency ramp (up to 240MHz,
+  // its highest and most current-hungry mode) happened BEFORE this, at the
+  // exact same instant as Vext's own inrush as its capacitors charge cold —
+  // stacking two of the heaviest current draws in this whole boot sequence
+  // right on top of each other, at the worst possible moment. This is the
+  // same "never stack the two heaviest draws back to back" principle
+  // already proven out in the v5.53 sleep-entry fix, just not yet applied
+  // at this mirror-image wake-entry point. Prompted by Sep 16 evidence:
+  // the v5.74 settle-delay widen (20ms->50ms) alone did NOT stop "vext_on"
+  // brownouts — they'd become 100% reproducible across a wide 30-70%
+  // battery range, not just low-charge. Worth trying before concluding
+  // software has hit its limit here.
+  markOp("vext_on");
+  VextON();
+  delay(50);  // allow the rail to fully stabilise before ANY further current draw
+
+  // ── CPU frequency ramp-up — now AFTER Vext has already stabilised ─────────
   if (ps_cpu_wake_mhz == 80 || ps_cpu_wake_mhz == 160 || ps_cpu_wake_mhz == 240)
     setCpuFrequencyMhz(ps_cpu_wake_mhz);
   else
     setCpuFrequencyMhz(240);
   Serial.printf("[PWRUP] CPU -> %d MHz\n", getCpuFrequencyMhz());
-
-  // ── Vext rail on — OLED and Vext peripherals need power before init ───────
-  markOp("vext_on");
-  VextON();
-  // v5.74: widened from 20ms. ui.init() (unconditional, later in setup())
-  // is now the ONLY OLED init this boot does — see below — so it's the
-  // sole remaining current-draw event on this rail. Give it a bit more
-  // recovery time before that happens, same "don't stack the two heaviest
-  // draws back to back" principle as the v5.53 sleep-entry fix.
-  delay(50);
 
   // ── DHT pin: restore to normal output-capable mode (DHT lib sets it) ──────
   // Just ensure it's not left floating — DHT.begin() in setup() handles the rest
@@ -5218,7 +5278,12 @@ void setup() {
     }
     if (truePowerEvent) {
       rtcBootEpoch = 0;   // RTC truly wiped — fresh power-on tracking starts now
-      rtcConsecutiveCrashes = 0;  // legitimate fresh power cycle/reflash, not a crash streak
+      // v5.75: BROWNOUT no longer resets the crash-loop counter — see below,
+      // it now increments it same as the non-power-event crash types. Only a
+      // genuine POWERON (real power cycle or reflash) still resets it; that's
+      // the only case in this branch that's still actually a legitimate
+      // fresh restart rather than evidence of a running problem.
+      if (rstReason == ESP_RST_POWERON) rtcConsecutiveCrashes = 0;
       // v5.70: BROWNOUT now captures the breadcrumb too — a brownout IS "some
       // operation's current draw tripped a voltage sag," so knowing WHICH
       // operation was in flight (wifi_connect / dht_read / ntp_sync / etc.)
@@ -5229,6 +5294,14 @@ void setup() {
       // v5.72: feed the persistent pending-report state for BROWNOUT too —
       // same reasoning, only excluded for genuine POWERON.
       if (rstReason == ESP_RST_BROWNOUT) {
+        // v5.75: BROWNOUT now counts toward the crash-loop threshold too —
+        // found in practice on Sep 15: 19 consecutive BROWNOUTs in ~20 min,
+        // none of which could ever have tripped the cooldown under the old
+        // "BROWNOUT always resets the counter" behavior, no matter how many
+        // happened back to back. This is the ONE place BROWNOUT increments
+        // rtcConsecutiveCrashes -- the truePowerEvent branch above only
+        // resets it for genuine POWERON now, so this survives untouched.
+        rtcConsecutiveCrashes++;
         rtcUnreportedCrashes++;
         lastResetReasonStr.toCharArray(rtcPendingResetReason, sizeof(rtcPendingResetReason));
         strncpy(rtcPendingLastOp, rtcLastOp, sizeof(rtcPendingLastOp) - 1);
@@ -5236,17 +5309,38 @@ void setup() {
         rtcPendingEpochGlitch = rtcEpochGlitchThisBoot;
       }
     } else {
-      rtcConsecutiveCrashes++;
-      // v5.68: capture whatever was running right before THIS crash, before
-      // markOp() below (or anything later this boot) overwrites the tag.
-      crashLastOp = String(rtcLastOp);
-      // v5.72: also feed the persistent pending-report state, so this
-      // survives even if THIS boot's own report never goes out.
-      rtcUnreportedCrashes++;
-      lastResetReasonStr.toCharArray(rtcPendingResetReason, sizeof(rtcPendingResetReason));
-      strncpy(rtcPendingLastOp, rtcLastOp, sizeof(rtcPendingLastOp) - 1);
-      rtcPendingLastOp[sizeof(rtcPendingLastOp) - 1] = '\0';
-      rtcPendingEpochGlitch = rtcEpochGlitchThisBoot;
+      // v5.75: found during this audit — every non-power-event reset was
+      // counted as a "crash" here, including a deliberate ESP.restart()
+      // right after a successful OTA install. That meant pushing a few
+      // firmware updates in quick succession (completely normal during
+      // active development) could trip the crash-loop cooldown on the 3rd
+      // one and skip WiFi entirely, for no real reason -- and separately,
+      // would have shown a misleading "unreported crash" note on the next
+      // report for something that wasn't a crash at all. Peek at the
+      // "updated" NVS flag -- read-only here, doesn't consume it, the
+      // later post-OTA splash/ntfy code still needs to read and clear it
+      // itself -- to tell a genuine post-install reboot apart from an
+      // actual crash, and skip ALL crash attribution for it, not just the
+      // loop counter.
+      preferences.begin("ota", true);
+      bool postOtaReboot = preferences.getBool("updated", false);
+      preferences.end();
+      if (postOtaReboot) {
+        Serial.println(F("[BOOT] Software-restart following an OTA install -- "
+                          "not treated as a crash"));
+      } else {
+        rtcConsecutiveCrashes++;
+        // v5.68: capture whatever was running right before THIS crash, before
+        // markOp() below (or anything later this boot) overwrites the tag.
+        crashLastOp = String(rtcLastOp);
+        // v5.72: also feed the persistent pending-report state, so this
+        // survives even if THIS boot's own report never goes out.
+        rtcUnreportedCrashes++;
+        lastResetReasonStr.toCharArray(rtcPendingResetReason, sizeof(rtcPendingResetReason));
+        strncpy(rtcPendingLastOp, rtcLastOp, sizeof(rtcPendingLastOp) - 1);
+        rtcPendingLastOp[sizeof(rtcPendingLastOp) - 1] = '\0';
+        rtcPendingEpochGlitch = rtcEpochGlitchThisBoot;
+      }
     }
     markOp("boot");  // reset the tag for this boot's own tracking
     // else: rtcBootEpoch kept from RTC memory (OTA/crash/WDT — still valid)
