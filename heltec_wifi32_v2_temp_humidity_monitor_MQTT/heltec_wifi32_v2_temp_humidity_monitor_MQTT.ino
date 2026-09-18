@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.76
- * Last Updated:  2026-09-16
+ * Version:       5.77
+ * Last Updated:  2026-09-17
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,25 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.77 — 2026-09-17
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: requested safety gate — unattended OTA installs (auto-update or
+ *         MQTT-requested) now require battery >= OTA_MIN_BATTERY_PCT (30%)
+ *         before proceeding. An install always means an extra restart
+ *         immediately followed by a fresh WiFi reconnect — exactly the
+ *         current-draw sequence this whole investigation has been
+ *         chasing, so installing unattended on marginal battery risked
+ *         compounding the brownout problem it's meant to run alongside.
+ *         Deferred installs stay pending (otaUpdateAvailable/
+ *         otaRequestedViaMqtt untouched) and retry automatically on a
+ *         later wake once charge recovers — no need to ask again. Sends
+ *         one ntfy note per low-battery episode (not every wake while it
+ *         stays under threshold, which could be days), re-arming once the
+ *         battery clears the threshold again. Manual web-button installs
+ *         are untouched — that's a person actively present who can
+ *         already see the battery level before clicking.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.76 — 2026-09-16
@@ -135,6 +154,8 @@
  *         alone doesn't fully resolve the pattern.
  *
  *
+ *
+ *
  */
 
 
@@ -194,7 +215,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.76"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.77"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -226,6 +247,9 @@ bool     otaDismissed       = false;   // user clicked Dismiss on dashboard
 bool     otaAutoUpdate         = false;   // persisted setting — install without asking
 bool     otaRequestedViaMqtt   = false;   // set by /ota/request retained MQTT message this wake
 bool     otaInstallAttemptedThisWake = false;  // guard — only try once per wake either way
+// v5.77: sent once per low-battery episode, not every wake while it stays
+// under OTA_MIN_BATTERY_PCT (which could be days) — see handleOtaAutoOrRequested().
+RTC_DATA_ATTR bool rtcOtaDeferredNotified = false;
 // v5.58: set true the moment a person hits /ota_check (button click or the
 // OTA page's own on-load fetch) — a plain global, so it naturally resets to
 // false on the next wake/boot with no explicit clearing needed. Suppresses
@@ -458,6 +482,10 @@ bool rtcEpochGlitchThisBoot = false;
 RTC_DATA_ATTR uint8_t rtcConsecutiveCrashes = 0;
 #define CRASH_LOOP_THRESHOLD    3            // consecutive non-power resets before cooldown kicks in
 #define CRASH_LOOP_COOLDOWN_MS  (30UL*60UL*1000UL)  // 30 min — skips WiFi entirely, just rests
+// v5.77: minimum battery % for an unattended OTA install (auto-update or
+// MQTT-requested) to proceed — see handleOtaAutoOrRequested(). An install
+// always means an extra restart + fresh WiFi reconnect right after.
+#define OTA_MIN_BATTERY_PCT     30
 
 // v5.68: lightweight "what was running" breadcrumb. ESP32 doesn't retain
 // any context about what the code was doing at the moment of an int-wdt/
@@ -3407,6 +3435,35 @@ void handleOtaAutoOrRequested() {
   bool shouldInstall = otaRequestedViaMqtt ||
                         (otaAutoUpdate && otaUpdateAvailable && !otaManualCheckThisWake);
   if (!shouldInstall) return;
+
+  // v5.77: requested safety gate — an OTA install always means an extra
+  // ESP.restart() immediately followed by a fresh WiFi reconnect, exactly
+  // the current-draw sequence this whole investigation has been chasing.
+  // Installing unattended while the battery is already marginal risks
+  // exactly compounding the brownout problem it's meant to be running
+  // alongside, not just being unlucky timing. Applies to BOTH auto-update
+  // and MQTT-requested installs — neither has a person watching. The
+  // manual web button is untouched: that's a person actively present who
+  // can already see the battery level on the dashboard before clicking.
+  if (batteryPercentage < OTA_MIN_BATTERY_PCT) {
+    otaInstallAttemptedThisWake = true;  // don't re-evaluate/re-send every loop() iteration this wake
+    Serial.printf("[OTA] Install deferred — battery %d%% below %d%% safety threshold\n",
+                  batteryPercentage, OTA_MIN_BATTERY_PCT);
+    if (!rtcOtaDeferredNotified && ntfy_enabled && ntfy_topic.length()) {
+      sendNtfy("Update Deferred: " + device_name,
+               "🔋 Battery at " + String(batteryPercentage) + "% — below the " +
+               String(OTA_MIN_BATTERY_PCT) + "% safety threshold for unattended installs.\n"
+               "Will retry automatically once charge recovers, or install manually "
+               "from the web UI now if you'd rather not wait.",
+               2, "battery,warning");
+      rtcOtaDeferredNotified = true;  // once per episode — see reset below once battery clears
+    }
+    // Don't clear otaRequestedViaMqtt or otaUpdateAvailable — both should
+    // still be pending so this retries automatically on a later wake once
+    // the battery has recovered, without needing the person to ask again.
+    return;
+  }
+  rtcOtaDeferredNotified = false;  // battery's back above threshold — re-arm for next time
 
   // otaDownloadUrl/CRC/size are plain globals, NOT RTC-persisted — on most
   // wakes the 24h interval guard skips the live manifest fetch entirely and
