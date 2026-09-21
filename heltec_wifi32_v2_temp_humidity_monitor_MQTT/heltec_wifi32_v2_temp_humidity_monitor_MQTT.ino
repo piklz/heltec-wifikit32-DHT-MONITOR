@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.77
- * Last Updated:  2026-09-17
+ * Version:       5.78
+ * Last Updated:  2026-09-21
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,24 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.78 — 2026-09-21
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: found in practice — an int-wdt crash-recovery boot briefly lit
+ *         the OLED/LED even with Stealth configured. The v5.53 fix that
+ *         treats a crash-recovery boot as "unattended, no person present"
+ *         (skipping the display/LED entirely, same as a normal stealth
+ *         timer wake) only ever checked for ESP_RST_BROWNOUT
+ *         (wokeFromBrownout) — int-wdt, task-wdt, and panic are exactly as
+ *         unattended as a brownout, but fell through to the default
+ *         Active-mode path since none of those matched. Renamed to
+ *         wokeFromCrashType and extended to cover ESP_RST_INT_WDT,
+ *         ESP_RST_TASK_WDT, and ESP_RST_PANIC alongside BROWNOUT.
+ *         Deliberately still EXCLUDES ESP_RST_SW (software-restart): that
+ *         reason is ambiguous with a deliberate post-OTA reboot, which
+ *         should keep showing its confirmation splash clearly to someone
+ *         actively watching an install complete, not go dark immediately.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.77 — 2026-09-17
@@ -78,80 +96,6 @@
  *         input (recommended since the very start of this investigation,
  *         still not yet applied) is the fix actually needed next.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.75 — 2026-09-15
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: BROWNOUT no longer resets the crash-loop counter (rtcConsecutiveCrashes)
- *         — it now increments it the same as the other crash-type resets.
- *         Found in practice on Sep 15: 19 consecutive BROWNOUTs in ~20
- *         minutes, none of which could ever have tripped the v5.64 cooldown
- *         under the old behavior, no matter how many happened back to
- *         back, since BROWNOUT was treated as "legitimate restart" same as
- *         POWERON. Only a genuine POWERON (real power cycle or reflash)
- *         still resets the counter now — that's the only case in this
- *         branch that's actually a fresh restart rather than evidence of
- *         a running problem. At CRASH_LOOP_THRESHOLD (3), this would have
- *         caught the Sep 15 loop after 3 brownouts instead of running
- *         unchecked for 19.
- *  - FIX (found during this round's full re-audit, not previously
- *         reported): a deliberate ESP.restart() right after a successful
- *         OTA install was being counted as a crash — every non-power-event
- *         reset fed both the crash-loop counter AND the "unreported
- *         crash" report, with no way to tell a genuine post-install
- *         reboot apart from an actual int-wdt/task-wdt/software-restart
- *         crash. That meant pushing a few firmware updates in quick
- *         succession (normal during active development — this whole
- *         project has done exactly that constantly) could trip the
- *         crash-loop cooldown and skip WiFi for no real reason, and would
- *         also have shown a misleading "⚠️ unreported crash" note on the
- *         next report for something that wasn't a crash at all. Now peeks
- *         at the "updated" NVS flag (read-only, doesn't consume it — the
- *         existing post-OTA splash/ntfy code still needs to) to exclude a
- *         genuine post-install reboot from all crash attribution.
- *  - Stale comment/log text in crashLoopCooldownSleep() fixed — said
- *         "consecutive non-power resets", no longer accurate now that
- *         BROWNOUT feeds the same counter.
- *  - Audited: DHT retry timing (readSensor, worst-case 4s, reasonable),
- *         battery ADC averaging (already 16-sample with min/max variance
- *         tracking and two-pass USB/battery calibration — solid, no
- *         change needed), and crashLoopCooldownSleep()'s interaction with
- *         VextOFF()/powerUpPeripherals() ordering (correct — cooldown
- *         always runs after powerUpPeripherals() already turned Vext on,
- *         so VextOFF() correctly undoes it). One item noted but NOT
- *         fixed this round: rtcWifiFailStreak is purely a diagnostic
- *         counter — no adaptive sleep-interval backoff reads it yet, so a
- *         genuine multi-cycle WiFi outage still retries at the normal
- *         cadence rather than backing off. Worth considering separately.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.74 — 2026-09-12
- * ─────────────────────────────────────────────────────────────────────────────
- *  - FIX: real, evidence-driven fix for the "pwrup_oled" brownouts — 5
- *         separate BROWNOUTs (Sep 10-12, spanning 10-35% battery) ALL
- *         landed on this exact tag after the v5.73 split. Turned out the
- *         OLED was being fully hardware-initialised TWICE on every single
- *         boot: once in powerUpPeripherals() (display.init(), the
- *         "pwrup_oled" tag), and again moments later via ui.init(), which
- *         runs UNCONDITIONALLY regardless of stealth mode and does a full
- *         display.init() internally anyway. The first call was pure waste
- *         — identical work, zero benefit, doubling exposure to the exact
- *         current-inrush moment (SSD1306 charge-pump activation) those 5
- *         brownouts pinpointed. Removed it; ui.init() alone now handles
- *         OLED init, tagged "oled_init" as before. Widened the Vext
- *         settle delay from 20ms to 50ms, since ui.init()'s draw is now
- *         the sole remaining event on that rail — same "don't stack the
- *         two heaviest draws back to back" principle as the v5.53 sleep-
- *         entry fix. display.clear() added back explicitly alongside the
- *         remaining ui.init() call, since the removed display.init() was
- *         also doing that.
- *         Considered and rejected: skipping ui.init() itself for stealth
- *         wakes (would eliminate the spike entirely on stealth cycles,
- *         where the screen is never shown) — the button-press stealth
- *         override elsewhere assumes ui.init() already configured the UI
- *         library's frame state before calling displayOn() alone; skipping
- *         it outright risks a blank/broken screen if that override fires
- *         mid-cycle. Worth revisiting later with more care if this fix
- *         alone doesn't fully resolve the pattern.
  *
  *
  *
@@ -215,7 +159,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.77"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.78"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -5304,7 +5248,17 @@ void setup() {
   // v5.53: read once, up front -- both the boot-counter branch below and the
   // stealthThisWake computation further down need to see the reset reason.
   esp_reset_reason_t rstReason     = esp_reset_reason();
-  bool wokeFromBrownout = (rstReason == ESP_RST_BROWNOUT);
+  // v5.78: was BROWNOUT-only ("wokeFromBrownout") — found in practice: an
+  // int-wdt crash-recovery boot briefly lit the OLED/LED even in configured
+  // Stealth mode, because stealthThisWake's formula only treated BROWNOUT
+  // as "unattended, no person present." int-wdt/task-wdt/panic are exactly
+  // as unattended as a brownout -- extending the same treatment to them.
+  // Deliberately EXCLUDES ESP_RST_SW (software-restart): that reason is
+  // ambiguous with a deliberate post-OTA reboot, which should keep showing
+  // its confirmation splash clearly to someone actively watching an
+  // install complete, not go dark immediately.
+  bool wokeFromCrashType = (rstReason == ESP_RST_BROWNOUT || rstReason == ESP_RST_INT_WDT ||
+                            rstReason == ESP_RST_TASK_WDT || rstReason == ESP_RST_PANIC);
 
   if (wokeFromSleep) {
     // Sleep wake: just increment RTC counter — no NVS write, no flash wear
@@ -5435,7 +5389,7 @@ void setup() {
   // was most stressed. Now it's treated like stealth for power purposes,
   // same as a normal timer wake, as long as Stealth mode is the configured
   // wakeDisplayMode -- an Active-mode setup still behaves as before.
-  stealthThisWake = (wakeDisplayMode == 0) && (wokeByTimer || wokeFromBrownout);
+  stealthThisWake = (wakeDisplayMode == 0) && (wokeByTimer || wokeFromCrashType);
 
   // Hardware init — Vext already on from powerUpPeripherals(); just set button pin
   pinMode(BUTTON_PIN, INPUT_PULLUP);

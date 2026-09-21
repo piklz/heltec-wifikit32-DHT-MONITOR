@@ -1,8 +1,8 @@
 {
-  "version": "5.77",
+  "version": "5.78",
   "build_date": "2026-09-18",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.77/heltec_wifkit32v2_v577_ED53645B_firmware.ino.bin",
   "size": 1469568,
   "crc32": "ED53645B",
-  "changelog": "safety gate \u2014 unattended OTA installs (auto-update or MQTT-requested) now require battery >= OTA_MIN_BATTERY_PCT (30%)"
+  "changelog": "an int-wdt crash-recovery boot briefly lit the OLED/LED even with Stealth configured."
 }
