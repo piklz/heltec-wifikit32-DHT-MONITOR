@@ -1,8 +1,8 @@
 {
   "version": "5.78",
-  "build_date": "2026-09-18",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.77/heltec_wifkit32v2_v577_ED53645B_firmware.ino.bin",
-  "size": 1469568,
-  "crc32": "ED53645B",
+  "build_date": "2026-09-21",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.78/heltec_wifkit32v2_v578_77AC2268_firmware.ino.bin",
+  "size": 1469616,
+  "crc32": "77AC2268",
   "changelog": "an int-wdt crash-recovery boot briefly lit the OLED/LED even with Stealth configured."
 }
