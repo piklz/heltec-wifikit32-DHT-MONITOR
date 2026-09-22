@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.78
- * Last Updated:  2026-09-21
+ * Version:       5.79
+ * Last Updated:  2026-09-22
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,35 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.79 — 2026-09-22
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: real gap in the v5.64 crash-loop cooldown, found via a genuinely
+ *         severe incident (Sep 21-22): 153 hard resets in ~75 minutes,
+ *         roughly one every 30 seconds, sustained — and the cooldown never
+ *         engaged even once, despite existing specifically to catch a
+ *         runaway loop like this. Root cause: rtcConsecutiveCrashes lives
+ *         in RTC memory, and every one of those 153 crashes carried the
+ *         "(RTC glitch?)" tag — meaning RTC memory was being disturbed on
+ *         EVERY one of them. The safeguard's own counter is stored in
+ *         exactly the memory region that's unreliable during the failure
+ *         mode it exists to detect, so it was very likely being wiped
+ *         before it could ever accumulate to threshold.
+ *         NVS (flash), unlike RTC_SLOW memory, proved completely reliable
+ *         through the whole episode — the lifetime hard-reset counter
+ *         (nvsBootBase) correctly tracked all 153 resets via NVS the
+ *         entire time. Added a second, NVS-only cross-check
+ *         (nvsBootsSinceOk): a new "lastok_boot" NVS field, updated only
+ *         when stale (right after recovering from a hard reset, not on
+ *         every ordinary cycle — avoids adding a new flash write to
+ *         normal operation), lets the hard-reset branch compute "hard
+ *         resets since the last known-good cycle" from NVS alone,
+ *         independent of whatever state RTC memory is currently in. The
+ *         crash-loop check now triggers if EITHER the RTC counter OR this
+ *         NVS counter reaches CRASH_LOOP_THRESHOLD — belt and suspenders:
+ *         RTC stays the cheap normal-case check, NVS is the one that
+ *         actually survives an RTC-corrupting crash-loop like this one.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.78 — 2026-09-21
@@ -47,56 +76,6 @@
  *         reason is ambiguous with a deliberate post-OTA reboot, which
  *         should keep showing its confirmation splash clearly to someone
  *         actively watching an install complete, not go dark immediately.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.77 — 2026-09-17
- * ─────────────────────────────────────────────────────────────────────────────
- *  - NEW: requested safety gate — unattended OTA installs (auto-update or
- *         MQTT-requested) now require battery >= OTA_MIN_BATTERY_PCT (30%)
- *         before proceeding. An install always means an extra restart
- *         immediately followed by a fresh WiFi reconnect — exactly the
- *         current-draw sequence this whole investigation has been
- *         chasing, so installing unattended on marginal battery risked
- *         compounding the brownout problem it's meant to run alongside.
- *         Deferred installs stay pending (otaUpdateAvailable/
- *         otaRequestedViaMqtt untouched) and retry automatically on a
- *         later wake once charge recovers — no need to ask again. Sends
- *         one ntfy note per low-battery episode (not every wake while it
- *         stays under threshold, which could be days), re-arming once the
- *         battery clears the threshold again. Manual web-button installs
- *         are untouched — that's a person actively present who can
- *         already see the battery level before clicking.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * CHANGELOG v5.76 — 2026-09-16
- * ─────────────────────────────────────────────────────────────────────────────
- *  - TRY: reordered powerUpPeripherals() so Vext turns on BEFORE the CPU
- *         frequency ramp-up, not after. Prompted by Sep 16 evidence: 6
- *         consecutive wakes, ALL "BROWNOUT [was: vext_on]", spanning a
- *         30-70% battery range — no longer intermittent or low-charge-
- *         specific, now 100% reproducible. The v5.74 settle-delay widen
- *         (20ms->50ms) alone did not stop it. Previously the CPU ramp (up
- *         to 240MHz, its most current-hungry mode) happened immediately
- *         BEFORE Vext turned on — meaning if the chip's default boot
- *         frequency is lower than the configured wake speed, that ramp's
- *         own current step was landing at the exact same instant as
- *         Vext's inrush, stacking two of the heaviest draws in the whole
- *         boot sequence right on top of each other. Same principle as the
- *         proven v5.53 sleep-entry fix, applied here for the first time.
- *         Honest caveat: whether this actually helps depends on the
- *         board's configured default CPU frequency (an Arduino IDE/
- *         board-package setting, not visible from this source file) — if
- *         the chip already boots at the same frequency setCpuFrequencyMhz()
- *         would set here, this reorder changes nothing, since there'd be
- *         no real ramp-transition current draw to move out of the way.
- *         Worth trying since it's low-risk regardless. If "vext_on"
- *         brownouts persist at this rate after this change, that's a
- *         strong signal software has been narrowed about as far as it
- *         reasonably can here, and the bulk capacitor across the battery
- *         input (recommended since the very start of this investigation,
- *         still not yet applied) is the fix actually needed next.
- *
- *
  *
  *
  *
@@ -159,7 +138,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.78"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.79"   // keep in sync with VERSION comment at top
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
@@ -424,6 +403,10 @@ bool rtcEpochGlitchThisBoot = false;
 // a legitimate restart, not evidence of a running crash loop) — so this
 // safeguard never interferes with active development over USB.
 RTC_DATA_ATTR uint8_t rtcConsecutiveCrashes = 0;
+// v5.79: NVS-derived crash-loop cross-check — plain global (not RTC), computed
+// fresh each hard-reset boot from NVS state (bootcount vs lastok_boot). See
+// the hard-reset branch in setup() for how it's computed and why.
+uint32_t nvsBootsSinceOk = 0;
 #define CRASH_LOOP_THRESHOLD    3            // consecutive non-power resets before cooldown kicks in
 #define CRASH_LOOP_COOLDOWN_MS  (30UL*60UL*1000UL)  // 30 min — skips WiFi entirely, just rests
 // v5.77: minimum battery % for an unattended OTA install (auto-update or
@@ -819,9 +802,10 @@ void VextOFF() { pinMode(Vext, OUTPUT); digitalWrite(Vext, HIGH); }
 // which let a run of brownouts loop indefinitely with no cooldown ever
 // engaging — see the Sep 15 changelog entry).
 void crashLoopCooldownSleep() {
-  Serial.printf("[CRASH-LOOP] %u consecutive crash-type resets (brownout included) — "
+  Serial.printf("[CRASH-LOOP] RTC counter=%u, NVS counter=%u (either >= %d triggers) — "
                 "cooling down %lu min, skipping WiFi this cycle\n",
-                rtcConsecutiveCrashes, CRASH_LOOP_COOLDOWN_MS / 60000UL);
+                rtcConsecutiveCrashes, nvsBootsSinceOk, CRASH_LOOP_THRESHOLD,
+                CRASH_LOOP_COOLDOWN_MS / 60000UL);
   VextOFF();
   esp_sleep_enable_timer_wakeup((uint64_t)CRASH_LOOP_COOLDOWN_MS * 1000ULL);
   esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);  // button still wakes immediately
@@ -1573,6 +1557,17 @@ void goToDeepSleep() {
   // succeeded this cycle — means the boot didn't crash, which is genuine
   // evidence any prior consecutive-crash streak is over.
   rtcConsecutiveCrashes = 0;
+  // v5.79: NVS-side counterpart — only writes when actually stale (cheap
+  // read-check first), so this doesn't add a new flash write to every
+  // ordinary cycle, only right after recovering from a hard reset. See the
+  // nvsBootsSinceOk declaration and the hard-reset branch in setup() for
+  // the full reasoning (RTC-based crash counting proved unreliable during
+  // exactly the RTC-glitching crash types this is meant to catch).
+  preferences.begin("sys", false);
+  if ((uint32_t)preferences.getInt("lastok_boot", 0) != nvsBootBase) {
+    preferences.putInt("lastok_boot", (int)nvsBootBase);
+  }
+  preferences.end();
 
   // ── 3-second sleep countdown on OLED ────────────────────────────────────
   // Skipped in Stealth timer wakes — the display is off and we don't want to
@@ -5358,10 +5353,22 @@ void setup() {
     preferences.begin("sys", false);
     uint32_t nvsBase = (uint32_t)preferences.getInt("bootcount", 0) + 1;
     preferences.putInt("bootcount", (int)nvsBase);
+    // v5.79: NVS-based crash-loop cross-check. rtcConsecutiveCrashes lives in
+    // RTC memory, which the "(RTC glitch?)" tag has repeatedly shown gets
+    // disturbed on exactly these crash types — meaning the safeguard's own
+    // counter is vulnerable to being wiped by the very thing it's meant to
+    // catch. NVS proved fully reliable through a 153-crash episode where the
+    // RTC-based cooldown never engaged even once. lastOkBoot (updated only on
+    // a successful cycle, in goToDeepSleep()) lets us compute "hard resets
+    // since the last known-good cycle" from NVS alone, independent of
+    // whatever state RTC memory is currently in.
+    uint32_t lastOkBoot = (uint32_t)preferences.getInt("lastok_boot", 0);
     preferences.end();
+    nvsBootsSinceOk = (lastOkBoot > 0 && nvsBase > lastOkBoot) ? (nvsBase - lastOkBoot) : 0;
     nvsBootBase = nvsBase;
     bootCount = (int)nvsBase;
-    Serial.printf("[BOOT] Power-on/crash — count %d written to NVS\n", bootCount);
+    Serial.printf("[BOOT] Power-on/crash — count %d written to NVS (%u since last known-good cycle)\n",
+                  bootCount, nvsBootsSinceOk);
   }
   batteryWarnSent = false;
   if (wokeByButton) Serial.println(F("[BOOT] Woke by button"));
@@ -5373,7 +5380,12 @@ void setup() {
   // CRASH_LOOP_THRESHOLD consecutive non-power resets in a row with no
   // successful cycle between them (see rtcConsecutiveCrashes declaration
   // above for the full reasoning). Does not return.
-  if (!wokeFromSleep && rtcConsecutiveCrashes >= CRASH_LOOP_THRESHOLD) {
+  // v5.79: OR'd with the NVS-based cross-check above — either counter
+  // reaching threshold is sufficient. Belt and suspenders: the RTC check is
+  // cheap and works fine normally; the NVS check is the one that actually
+  // survives an RTC-corrupting crash-loop like the one that prompted this.
+  if (!wokeFromSleep && (rtcConsecutiveCrashes >= CRASH_LOOP_THRESHOLD ||
+                          nvsBootsSinceOk        >= CRASH_LOOP_THRESHOLD)) {
     crashLoopCooldownSleep();
   }
 
