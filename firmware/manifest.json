@@ -1,8 +1,8 @@
 {
   "version": "5.79",
-  "build_date": "2026-09-21",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.78/heltec_wifkit32v2_v578_77AC2268_firmware.ino.bin",
-  "size": 1469616,
-  "crc32": "77AC2268",
-  "changelog": "Added a second, NVS-only crash counter that doesn't share RTC's vulnerability — it compares the current reset count against a last known-good marker also stored in flash"
+  "build_date": "2026-09-22",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.79/heltec_wifkit32v2_v579_ABC8D144_firmware.ino.bin",
+  "size": 1469776,
+  "crc32": "ABC8D144",
+  "changelog": "Added a second, NVS-only crash counter that doesn't share RTC's vulnerability \u2014 it compares the current reset count against a last known-good marker also stored in flash"
 }
