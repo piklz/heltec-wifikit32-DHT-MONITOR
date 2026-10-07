@@ -7,19 +7,19 @@
       "chipFamily": "ESP32",
       "parts": [
         {
-          "path": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/latest/download/firmware-bootloader.bin",
+          "path": "https://raw.githubusercontent.com/piklz/heltec-wifikit32-DHT-MONITOR/main/web-firmware/firmware-bootloader.bin",
           "offset": 4096
         },
         {
-          "path": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/latest/download/firmware-partitions.bin",
+          "path": "https://raw.githubusercontent.com/piklz/heltec-wifikit32-DHT-MONITOR/main/web-firmware/firmware-partitions.bin",
           "offset": 32768
         },
         {
-          "path": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/latest/download/firmware-boot_app0.bin",
+          "path": "https://raw.githubusercontent.com/piklz/heltec-wifikit32-DHT-MONITOR/main/web-firmware/firmware-boot_app0.bin",
           "offset": 57344
         },
         {
-          "path": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/latest/download/firmware-app.bin",
+          "path": "https://raw.githubusercontent.com/piklz/heltec-wifikit32-DHT-MONITOR/main/web-firmware/firmware-app.bin",
           "offset": 65536
         }
       ]
