@@ -1,8 +1,8 @@
 {
-  "version": "5.79",
+  "version": "5.80",
   "build_date": "2026-09-22",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.79/heltec_wifkit32v2_v579_ABC8D144_firmware.ino.bin",
   "size": 1469776,
   "crc32": "ABC8D144",
-  "changelog": "Added a second, NVS-only crash counter that doesn't share RTC's vulnerability \u2014 it compares the current reset count against a last known-good marker also stored in flash"
+  "changelog": "Added: fresh initial firmware partioning firmware webtool (for blank new esp32 heltec boards) no need for arduino ide to initiate board ."
 }

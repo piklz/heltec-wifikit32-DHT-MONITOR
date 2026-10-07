@@ -31,6 +31,15 @@
  *  • Deep sleep support for low-power operation
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.80 — 2026-10-07
+ * ─────────────────────────────────────────────────────────────────────────────
+ * - ADDED: webtool to flash initial empty or new heltec board with firmware ,
+ *          with its partioning all setup and reayd to go  -without need for ,
+ *            arduino ide or esptool 
+ * 
+ * 
+ * 
+ * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.79 — 2026-09-22
  * ─────────────────────────────────────────────────────────────────────────────
  *  - FIX: real gap in the v5.64 crash-loop cooldown, found via a genuinely
