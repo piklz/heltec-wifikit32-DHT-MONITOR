@@ -1,8 +1,8 @@
 {
   "version": "5.80",
-  "build_date": "2026-09-22",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.79/heltec_wifkit32v2_v579_ABC8D144_firmware.ino.bin",
+  "build_date": "2026-10-07",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.80/heltec_wifkit32v2_v580_47CD0E0C_firmware.ino.bin",
   "size": 1469776,
-  "crc32": "ABC8D144",
+  "crc32": "47CD0E0C",
   "changelog": "Added: fresh initial firmware partioning firmware webtool (for blank new esp32 heltec boards) no need for arduino ide to initiate board ."
 }
