@@ -3,9 +3,7 @@ name: End-to-End Automated Firmware and Manifest Sync
 on:
   push:
     paths:
-      - 'firmware/manifest.json'
-      - '**/*.ino'
-      - '**/partitions.csv'
+      - 'firmware/manifest.json' # Triggers automatically on any code push/edit
 
   # Adds the dropdown selection menu and text inputs on the GitHub web UI
   workflow_dispatch:
@@ -14,10 +12,7 @@ on:
         description: 'Select Build Preset Target'
         required: true
         default: 'GitHub-Cloud'
-        type: choice
-        options:
-          - GitHub-Cloud
-          - Local-Pi5
+        type: environment # Links dropdown choices to GitHub Environments
       manual_version:
         description: 'New Version (leave blank to use existing manifest version)'
         required: false
@@ -238,6 +233,46 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "filename=$NEW_NAME" >> $GITHUB_OUTPUT
 
+      - name: Prepare Web-Flash Assets (ESP Web Tools)
+        run: |
+          # Isolated, additive step — doesn't touch the versioned/CRC'd app
+          # binary the OTA manifest.json already references (that file is
+          # left exactly as the previous step produced it). This just adds
+          # 4 FIXED-NAME copies alongside it so manifest.json (committed
+          # once to the repo root, served via GitHub Pages at flash.html)
+          # can reference them via the stable
+          # releases/latest/download/<fixed-name> URL pattern, which always
+          # resolves to the newest release — no manifest.json edits needed
+          # per release, ever.
+
+          # 1. App binary — copy (not move) the already-renamed OTA binary
+          cp "build/${{ steps.process_artifacts.outputs.filename }}" "build/firmware-app.bin"
+
+          # 2. Bootloader + partition table — arduino-cli's --output-dir
+          # already wrote these to ./build alongside the app .bin; the
+          # OTA step's TARGET_BIN selection explicitly excludes them
+          # (grep -v "bootloader" | grep -v "partitions"), they're just
+          # unused sitting in ./build until now.
+          BOOTLOADER_BIN=$(ls ./build/*.bootloader.bin | head -n 1)
+          PARTITIONS_BIN=$(ls ./build/*.partitions.bin | head -n 1)
+          cp "$BOOTLOADER_BIN" "build/firmware-bootloader.bin"
+          cp "$PARTITIONS_BIN" "build/firmware-partitions.bin"
+
+          # 3. boot_app0.bin — not a sketch-compile output at all, it's a
+          # static file bundled with the installed ESP32 core package
+          # itself (version-matched to the @3.3.10 core this workflow
+          # pins). Locate it rather than hardcoding its path, since the
+          # exact path includes the core version string.
+          BOOT_APP0=$(find "$HOME/.arduino15/packages/esp32" -name "boot_app0.bin" | head -n 1)
+          if [ -z "$BOOT_APP0" ]; then
+            echo "::error::boot_app0.bin not found under installed esp32 core package — web-flash assets incomplete"
+            exit 1
+          fi
+          cp "$BOOT_APP0" "build/firmware-boot_app0.bin"
+
+          echo "Web-flash assets ready:"
+          ls -la build/firmware-*.bin
+
       - name: Commit Updated Manifest Back to Repo
         run: |
           git config --global user.name "github-actions[bot]"
@@ -249,20 +284,7 @@ jobs:
           # Pull any changes that happened remotely during the compilation process
           git pull --rebase origin main
 
-          # GitHub can occasionally reject an otherwise valid ref update with
-          # a transient "fatal error in commit_refs" response.
-          for attempt in 1 2 3 4 5; do
-            if git push origin main; then
-              echo "Manifest push succeeded on attempt $attempt."
-              break
-            fi
-            if [ "$attempt" -eq 5 ]; then
-              echo "Manifest push failed after $attempt attempts."
-              exit 1
-            fi
-            echo "Manifest push failed on attempt $attempt; retrying in 10 seconds."
-            sleep 10
-          done
+          git push origin main
 
       - name: Generate Automated GitHub Release
         uses: softprops/action-gh-release@v2
@@ -270,7 +292,12 @@ jobs:
           tag_name: "v${{ steps.process_artifacts.outputs.version }}"
           name: "Release v${{ steps.process_artifacts.outputs.version }}"
           body: "Automated firmware deployment build. Embedded system binaries attached."
-          files: "build/${{ steps.process_artifacts.outputs.filename }}"
+          files: |
+            build/${{ steps.process_artifacts.outputs.filename }}
+            build/firmware-app.bin
+            build/firmware-bootloader.bin
+            build/firmware-partitions.bin
+            build/firmware-boot_app0.bin
           draft: false
           prerelease: false
         env:

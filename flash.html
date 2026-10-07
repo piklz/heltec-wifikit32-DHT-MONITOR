@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash Heltec WiFi Kit 32 V2 — Temp/Humidity Monitor</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #4db6ac;
+  }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+    padding: 32px 16px;
+  }
+  .card {
+    max-width: 560px;
+    width: 100%;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px 0; }
+  .sub { color: var(--muted); font-size: 14px; margin-bottom: 20px; }
+  ul { color: var(--muted); font-size: 14px; line-height: 1.6; padding-left: 20px; }
+  .browser-note {
+    background: #2d2a1a;
+    border: 1px solid #5c5120;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #e3c766;
+    margin: 16px 0;
+  }
+  esp-web-install-button {
+    display: block;
+    margin-top: 20px;
+  }
+  esp-web-install-button button {
+    background: var(--accent);
+    color: #04231f;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 22px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>⚡ Flash Firmware</h1>
+    <div class="sub">Heltec WiFi Kit 32 V2 — Temp/Humidity MQTT Monitor</div>
+
+    <div class="browser-note">
+      Requires <strong>Chrome, Edge, or Opera</strong> on desktop (uses Web Serial —
+      not supported in Firefox, Safari, or on mobile).
+    </div>
+
+    <ul>
+      <li>Connect the board via USB</li>
+      <li>Click the button below, then pick the correct serial port</li>
+      <li>Always installs the <strong>latest</strong> published release — no need to pick a version</li>
+      <li>This fully erases and re-flashes the board (bootloader + partitions + app) — use this for
+          a brand-new board or full recovery, not routine updates. Once running, the device updates
+          itself over WiFi from the dashboard.</li>
+    </ul>
+
+    <esp-web-install-button manifest="manifest.json">
+      <button slot="activate">Connect &amp; Install</button>
+    </esp-web-install-button>
+
+    <p style="margin-top:20px;font-size:13px;color:var(--muted)">
+      Source: <a href="https://github.com/piklz/heltec-wifikit32-DHT-MONITOR">heltec-wifikit32-DHT-MONITOR</a>
+    </p>
+  </div>
+</body>
+</html>
