@@ -55,8 +55,8 @@
  *         Only ever drawn in portal mode (a person is physically present by
  *         definition) — never during stealth wakes, so it adds nothing to the
  *         early-boot current investigation.
- *         New dependency: ricmoo/QRCode (added to release.yml's pinned library
- *         list — confirm the version pin against your local Library Manager).
+ *         The release workflow fetches pinned ricmoo/QRCode source into the
+ *         sketch's src tree, avoiding Library Manager header collisions.
  *  - REFACTOR: the AP name "ESP32-Setup" was a literal repeated at each call
  *         site (autoConnect, startConfigPortal, two OLED screens) — now one
  *         WIFI_AP_NAME constant, since the QR payload needed to reference it
@@ -773,7 +773,7 @@
 // ── WiFi / Networking ─────────────────────────────────────────────────────────
 #include <WiFi.h>
 #include <WiFiManager.h>
-#include <qrcode.h>   // ricmoo/QRCode v0.0.1, lightweight embedded QR encoder
+#include "src/ricmoo_qrcode/qrcode.h"   // ricmoo/QRCode v0.0.1
 #include <WebServer.h>
 #include <Update.h>
 

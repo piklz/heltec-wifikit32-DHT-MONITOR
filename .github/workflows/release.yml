@@ -145,10 +145,16 @@ jobs:
           arduino-cli lib install "ArduinoJson@7.4.3"
           arduino-cli lib install "OneButton@2.6.2"
           arduino-cli lib install "JLed@4.15.0"
-          # Pin the small, heap-free QR encoder directly to its upstream release.
-          # This avoids Library Manager resolving a different/missing QRCode header.
-          rm -rf "$HOME/Arduino/libraries/QRCode"
-          git clone --branch v0.0.1 --depth 1 https://github.com/ricmoo/QRCode.git "$HOME/Arduino/libraries/QRCode"
+          # Compile the pinned encoder as sketch-local source so another qrcode.h
+          # from the ESP32 core or an installed library cannot shadow it.
+          SKETCH_DIR=$(dirname "$(find . -name "*.ino" -print -quit)")
+          QR_SOURCE_DIR=$(mktemp -d)
+          git clone --branch v0.0.1 --depth 1 https://github.com/ricmoo/QRCode.git "$QR_SOURCE_DIR/QRCode"
+          rm -rf "$SKETCH_DIR/src/ricmoo_qrcode"
+          mkdir -p "$SKETCH_DIR/src/ricmoo_qrcode"
+          cp "$QR_SOURCE_DIR/QRCode/src/qrcode.c" "$SKETCH_DIR/src/ricmoo_qrcode/qrcode.c"
+          cp "$QR_SOURCE_DIR/QRCode/src/qrcode.h" "$SKETCH_DIR/src/ricmoo_qrcode/qrcode.h"
+          rm -rf "$QR_SOURCE_DIR"
 
       - name: Compile Heltec V2 Binary
         run: |
