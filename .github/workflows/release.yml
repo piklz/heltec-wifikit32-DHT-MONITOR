@@ -4,7 +4,6 @@ on:
   push:
     paths:
       - 'firmware/manifest.json' # Triggers automatically on any code push/edit
-      - '.github/workflows/release.yml'
 
   # Adds the dropdown selection menu and text inputs on the GitHub web UI
   workflow_dispatch:
@@ -146,6 +145,12 @@ jobs:
           arduino-cli lib install "ArduinoJson@7.4.3"
           arduino-cli lib install "OneButton@2.6.2"
           arduino-cli lib install "JLed@4.15.0"
+          # v5.80: portal-screen QR code (ricmoo/QRCode). Version pin is my best
+          # understanding of what Library Manager lists — confirm it matches
+          # what's installed locally (Sketch -> Include Library -> Manage
+          # Libraries -> "QRCode") and adjust if not; a wrong pin fails this
+          # step loudly rather than silently building against something else.
+          arduino-cli lib install "QRCode@0.0.1"
 
       - name: Compile Heltec V2 Binary
         run: |
@@ -236,15 +241,18 @@ jobs:
 
       - name: Prepare Web-Flash Assets (ESP Web Tools)
         run: |
-          # GitHub Release assets do not send CORS headers, so ESP Web Tools
-          # cannot fetch them from the GitHub Pages origin. Publish these
-          # fixed-name copies in the repository; the root manifest.json
-          # references them through raw.githubusercontent.com, which allows
-          # cross-origin browser downloads.
-          mkdir -p web-firmware
+          # Isolated, additive step — doesn't touch the versioned/CRC'd app
+          # binary the OTA manifest.json already references (that file is
+          # left exactly as the previous step produced it). This just adds
+          # 4 FIXED-NAME copies alongside it so manifest.json (committed
+          # once to the repo root, served via GitHub Pages at flash.html)
+          # can reference them via the stable
+          # releases/latest/download/<fixed-name> URL pattern, which always
+          # resolves to the newest release — no manifest.json edits needed
+          # per release, ever.
 
-          # Keep the versioned OTA binary in build/ for the GitHub Release.
-          cp "build/${{ steps.process_artifacts.outputs.filename }}" "web-firmware/firmware-app.bin"
+          # 1. App binary — copy (not move) the already-renamed OTA binary
+          cp "build/${{ steps.process_artifacts.outputs.filename }}" "build/firmware-app.bin"
 
           # 2. Bootloader + partition table — arduino-cli's --output-dir
           # already wrote these to ./build alongside the app .bin; the
@@ -253,8 +261,8 @@ jobs:
           # unused sitting in ./build until now.
           BOOTLOADER_BIN=$(ls ./build/*.bootloader.bin | head -n 1)
           PARTITIONS_BIN=$(ls ./build/*.partitions.bin | head -n 1)
-          cp "$BOOTLOADER_BIN" "web-firmware/firmware-bootloader.bin"
-          cp "$PARTITIONS_BIN" "web-firmware/firmware-partitions.bin"
+          cp "$BOOTLOADER_BIN" "build/firmware-bootloader.bin"
+          cp "$PARTITIONS_BIN" "build/firmware-partitions.bin"
 
           # 3. boot_app0.bin — not a sketch-compile output at all, it's a
           # static file bundled with the installed ESP32 core package
@@ -266,10 +274,10 @@ jobs:
             echo "::error::boot_app0.bin not found under installed esp32 core package — web-flash assets incomplete"
             exit 1
           fi
-          cp "$BOOT_APP0" "web-firmware/firmware-boot_app0.bin"
+          cp "$BOOT_APP0" "build/firmware-boot_app0.bin"
 
           echo "Web-flash assets ready:"
-          ls -la web-firmware/firmware-*.bin
+          ls -la build/firmware-*.bin
 
       - name: Commit Updated Manifest Back to Repo
         run: |
@@ -277,7 +285,6 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
           git add firmware/manifest.json
-          git add web-firmware/*.bin
           # Only commit if changes exist to prevent empty run loops. [skip ci] prevents triggering cloud push builds.
           git diff-index --quiet HEAD || git commit -m "chore: automated manifest update for v${{ steps.process_artifacts.outputs.version }} [skip ci]"
           # Pull any changes that happened remotely during the compilation process
@@ -293,11 +300,11 @@ jobs:
           body: "Automated firmware deployment build. Embedded system binaries attached."
           files: |
             build/${{ steps.process_artifacts.outputs.filename }}
-            web-firmware/firmware-app.bin
-            web-firmware/firmware-bootloader.bin
-            web-firmware/firmware-partitions.bin
-            web-firmware/firmware-boot_app0.bin
+            build/firmware-app.bin
+            build/firmware-bootloader.bin
+            build/firmware-partitions.bin
+            build/firmware-boot_app0.bin
           draft: false
           prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}QR code on the WiFi config-porta
