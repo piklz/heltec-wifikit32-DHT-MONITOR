@@ -14,7 +14,7 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.81
+ * Version:       5.82
  * Last Updated:  2026-10-19
  * License:       MIT
  *
@@ -30,6 +30,16 @@
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.82 — 2026-10-19
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - NEW: poweron bug was that the persistent crash streak counted 
+ *         deliberate power-on boots too. power-on, but the
+ *         stale NVS count was still 9, which triggered cooldown. updating boot-counter 
+ *         logic so a genuine power-on resets that persisted baseline; crash and brownout streaks 
+ *         still count toward cooldown. Oled would be blank so no cooldown msg shown either..
+ * 
+ * 
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.81 — 2026-10-09
  * ─────────────────────────────────────────────────────────────────────────────
@@ -815,7 +825,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.81"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.82"   // keep in sync with VERSION comment at top
 // v5.80: was a literal "ESP32-Setup" repeated at each call site (autoConnect,
 // startConfigPortal, the OLED text screen) — one shared constant now that the
 // QR code needs to reference it too, so it can't drift out of sync.

@@ -1,8 +1,8 @@
 {
-  "version": "5.81",
+  "version": "5.82",
   "build_date": "2026-10-19",
   "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.81/heltec_wifkit32v2_v581_4AEA3BDC_firmware.ino.bin",
   "size": 1476048,
   "crc32": "4AEA3BDC",
-  "changelog": "Added: qr code for webportal ,new release file for  qr module"
+  "changelog": "Added: poweron bug was that the persistent crash streak counted,"
 }
