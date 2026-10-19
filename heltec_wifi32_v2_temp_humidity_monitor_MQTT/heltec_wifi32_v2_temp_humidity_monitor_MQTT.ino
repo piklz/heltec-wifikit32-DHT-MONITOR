@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.80
- * Last Updated:  2026-10-09
+ * Version:       5.81
+ * Last Updated:  2026-10-19
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -815,11 +815,11 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.80"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.81"   // keep in sync with VERSION comment at top
 // v5.80: was a literal "ESP32-Setup" repeated at each call site (autoConnect,
 // startConfigPortal, the OLED text screen) — one shared constant now that the
 // QR code needs to reference it too, so it can't drift out of sync.
-#define WIFI_AP_NAME          "ESP32-Setup"
+#define WIFI_AP_NAME          "ESP32-DHTSetup"
 // This combines the text and macro into a single, permanent binary stamp
 const char* fw_binary_signature = "FW_VER:" FW_VERSION;
 
