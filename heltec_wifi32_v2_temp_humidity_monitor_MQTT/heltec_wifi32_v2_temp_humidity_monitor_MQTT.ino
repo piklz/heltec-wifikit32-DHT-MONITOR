@@ -773,7 +773,7 @@
 // ── WiFi / Networking ─────────────────────────────────────────────────────────
 #include <WiFi.h>
 #include <WiFiManager.h>
-#include <qrcode.h>   // v5.80 — ricmoo/QRCode, lightweight embedded QR encoder
+#include <qrcode.h>   // ricmoo/QRCode v0.0.1, lightweight embedded QR encoder
 #include <WebServer.h>
 #include <Update.h>
 

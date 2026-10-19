@@ -145,12 +145,10 @@ jobs:
           arduino-cli lib install "ArduinoJson@7.4.3"
           arduino-cli lib install "OneButton@2.6.2"
           arduino-cli lib install "JLed@4.15.0"
-          # v5.80: portal-screen QR code (ricmoo/QRCode). Version pin is my best
-          # understanding of what Library Manager lists — confirm it matches
-          # what's installed locally (Sketch -> Include Library -> Manage
-          # Libraries -> "QRCode") and adjust if not; a wrong pin fails this
-          # step loudly rather than silently building against something else.
-          arduino-cli lib install "QRCode@0.0.1"
+          # Pin the small, heap-free QR encoder directly to its upstream release.
+          # This avoids Library Manager resolving a different/missing QRCode header.
+          rm -rf "$HOME/Arduino/libraries/QRCode"
+          git clone --branch v0.0.1 --depth 1 https://github.com/ricmoo/QRCode.git "$HOME/Arduino/libraries/QRCode"
 
       - name: Compile Heltec V2 Binary
         run: |
