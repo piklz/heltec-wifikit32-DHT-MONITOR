@@ -6113,11 +6113,15 @@ void setup() {
     // disturbed on exactly these crash types — meaning the safeguard's own
     // counter is vulnerable to being wiped by the very thing it's meant to
     // catch. NVS proved fully reliable through a 153-crash episode where the
-    // RTC-based cooldown never engaged even once. lastOkBoot (updated only on
-    // a successful cycle, in goToDeepSleep()) lets us compute "hard resets
-    // since the last known-good cycle" from NVS alone, independent of
-    // whatever state RTC memory is currently in.
+    // RTC-based cooldown never engaged even once. lastOkBoot tracks hard
+    // resets since the last known-good cycle; a genuine power-on resets that
+    // baseline because a deliberate power cycle or fresh USB reflash is a
+    // recovery action, not another crash in the same boot streak.
     uint32_t lastOkBoot = (uint32_t)preferences.getInt("lastok_boot", 0);
+    if (rstReason == ESP_RST_POWERON) {
+      lastOkBoot = nvsBase;
+      preferences.putInt("lastok_boot", (int)lastOkBoot);
+    }
     preferences.end();
     nvsBootsSinceOk = (lastOkBoot > 0 && nvsBase > lastOkBoot) ? (nvsBase - lastOkBoot) : 0;
     nvsBootBase = nvsBase;
