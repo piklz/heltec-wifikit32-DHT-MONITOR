@@ -1,8 +1,8 @@
 {
-  "version": "5.82",
-  "build_date": "2026-10-19",
-  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.82/heltec_wifkit32v2_v582_33BA9614_firmware.ino.bin",
-  "size": 1476064,
-  "crc32": "33BA9614",
+  "version": "5.83",
+  "build_date": "2026-10-23",
+  "binary": "https://github.com/piklz/heltec-wifikit32-DHT-MONITOR/releases/download/v5.83/heltec_wifkit32v2_v583_AD7BDF44_firmware.ino.bin",
+  "size": 1476512,
+  "crc32": "AD7BDF44",
   "changelog": "Added: poweron bug was that the persistent crash streak counted,"
 }
