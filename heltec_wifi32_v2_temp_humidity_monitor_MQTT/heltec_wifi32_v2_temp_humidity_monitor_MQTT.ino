@@ -14,8 +14,8 @@
  * Author:        piklz
  * GitHub:        heltec-wifikit32-DHT-MONITOR
  * Repository:    github.com/piklz/heltec-wifikit32-DHT-MONITOR
- * Version:       5.82
- * Last Updated:  2026-10-19
+ * Version:       5.83
+ * Last Updated:  2026-10-21
  * License:       MIT
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,45 @@
  *  • Web-based dashboard & calibration interface
  *  • WiFi Manager for easy network configuration
  *  • Deep sleep support for low-power operation
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG v5.83 — 2026-10-21
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  - FIX: two leftover hard-coded "ESP32-Setup" strings the v5.80 WIFI_AP_NAME
+ *         refactor missed (its search only matched the bare literal): the OLED
+ *         System Info frame ("AP: ...") while WiFi is down, and the /reset_wifi
+ *         page text. After the AP was renamed to ESP32-DHTSetup both told the
+ *         user to join a network that no longer exists. Now built from
+ *         WIFI_AP_NAME.
+ *  - FIX: portal screen clipped the AP name — "ESP32-DHTSetup" is ~84px at 10pt
+ *         and the right-hand column is 66px. The name now breaks after the
+ *         hyphen onto its own line and the remaining lines move down at a fixed
+ *         10px pitch (six lines end at y=60); a short name still uses one line.
+ *         The text-only fallback screen drops to 10pt for names over 9 chars
+ *         (16pt clipped those too).
+ *  - FIX: the v5.80/v5.81 note saying the QR "never appears on stealth wakes"
+ *         was wrong. A stealth timer wake that cannot reach WiFi opens the 10 s
+ *         portal and the callback's override lights the OLED, so the large
+ *         white QR square was being drawn on unattended wakes. The QR is now
+ *         skipped when the portal opened on a stealth wake (text screen as
+ *         before).
+ *         NOT changed here, flagged for a decision: that same override leaves
+ *         stealthThisWake false for the rest of the boot, so an unattended wake
+ *         with WiFi down also shows the "WiFi connect failed" message and the
+ *         3 s sleep countdown (~16 s of lit OLED, LED blinking during the
+ *         portal) despite Stealth mode.
+ *  - FIX: QR version selection never actually fell back. drawWifiQrCode() looped
+ *         versions 2..3 and trusted qrcode_initText()'s return value, but the
+ *         library never rejects over-long data — it returns success and emits a
+ *         corrupt code (far enough over, it overruns an internal buffer). It only
+ *         worked because "ESP32-DHTSetup" is exactly 32 bytes, the version-2
+ *         limit; one more character would have produced an unscannable code
+ *         with no error. Version is now chosen from the payload length
+ *         (<=32 -> v2, <=53 -> v3, else text screen). Verified by decoding the
+ *         rendered on-screen layout with a real QR decoder.
+ *  - BUILD: QR library vendored into the repo at src/ricmoo_qrcode/
+ *         (ricmoo/QRCode v0.0.1, commit 5ba5d5b, MIT licence included). CI no
+ *         longer clones it, so a fresh clone now compiles.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * CHANGELOG v5.82 — 2026-10-19
@@ -825,7 +864,7 @@
 // 0 = disabled (no correction).
 #define RTC_CRYSTAL_PPM_FAST  16500UL  // measured: +16,500 PPM (~1.65% fast)
 
-#define FW_VERSION            "5.82"   // keep in sync with VERSION comment at top
+#define FW_VERSION            "5.83"   // keep in sync with VERSION comment at top
 // v5.80: was a literal "ESP32-Setup" repeated at each call site (autoConnect,
 // startConfigPortal, the OLED text screen) — one shared constant now that the
 // QR code needs to reference it too, so it can't drift out of sync.
@@ -2408,7 +2447,7 @@ void drawFrame2(ScreenDisplay *d, DisplayUiState *s, int16_t x, int16_t y) {
     d->drawString(0 + x, 43 + y, "RSSI: " + String(WiFi.RSSI()) + "dBm");
   } else {
     d->drawString(0 + x, 23 + y, "WiFi: Disconnected");
-    d->drawString(0 + x, 33 + y, "AP: ESP32-Setup");
+    d->drawString(0 + x, 33 + y, String("AP: ") + WIFI_AP_NAME);   // v5.83: was a stale literal
   }
   // Bottom line: total power-on uptime, or web UI countdown if window is active
   String bot = "On: " + getTotalUptime();
@@ -2618,25 +2657,34 @@ void saveConfigCallback() {
 // first, then draws the modules as unlit (BLACK) pixels on top. The white paper
 // doubles as the QR quiet zone.
 //
-// Sizing: 2px per module is the max that fits 128x64 for a usable code. Tries
-// version 2 (25x25 = 50px, leaves a 4px quiet zone) first, then version 3
-// (29x29 = 58px, 1px quiet zone) — same module size either way, but the smaller
-// version gives scanners more margin, and 29 bytes of payload fits version 2
-// (32-byte capacity at ECC_LOW) with only 3 bytes to spare, hence the fallback
-// if WIFI_AP_NAME is ever lengthened.
+// Sizing: 2px per module is the max that fits 128x64 for a usable code. Uses
+// version 2 (25x25 = 50px, 4px quiet zone) when the payload is <= 32 bytes, else
+// version 3 (29x29 = 58px, 1px quiet zone) up to 53 bytes — same module size either
+// way, but the smaller version gives scanners more margin. The payload is
+// 18 bytes + the AP name, so names up to 14 chars use v2 (the current
+// "ESP32-DHTSetup" is exactly at the limit), 15..35 chars use v3, and anything
+// longer falls back to the text screen. Special characters ; , : " \ in the AP
+// name would need backslash-escaping in the WIFI: payload.
 bool drawWifiQrCode() {
   const uint8_t SCALE = 2;
   QRCode qrcode;
   uint8_t qrcodeData[qrcode_getBufferSize(3)];   // sized for the largest version we try
   String payload = String("WIFI:T:nopass;S:") + WIFI_AP_NAME + ";;";
 
-  bool ok = false;
-  for (uint8_t version = 2; version <= 3 && !ok; version++) {
-    ok = (qrcode_initText(&qrcode, qrcodeData, version, ECC_LOW, payload.c_str()) == 0);
-  }
-  if (!ok) {
-    Serial.printf("[QR] Payload (%u bytes) doesn't fit versions 2-3 -- falling back to text screen\n",
-                  (unsigned)payload.length());
+  // v5.83: choose the version from the payload length ourselves. The previous
+  // version looped 2..3 and trusted qrcode_initText()'s return value, but this
+  // library NEVER rejects data that exceeds a version's capacity: it returns 0 and
+  // silently produces an unreadable code (and for much longer data it overruns its
+  // own internal buffer). Verified with a real decoder against the exact on-screen
+  // layout: 32 bytes decodes in v2, 33 bytes in v2 is unreadable but still "succeeds",
+  // 33..53 bytes decodes in v3, 54 is unreadable in v3. Byte-mode capacity at ECC_LOW:
+  // v2 = 32, v3 = 53 (this payload always contains lowercase, so it is always byte mode).
+  size_t len = payload.length();
+  uint8_t version = (len <= 32) ? 2 : (len <= 53) ? 3 : 0;
+  if (version == 0 ||
+      qrcode_initText(&qrcode, qrcodeData, version, ECC_LOW, payload.c_str()) != 0) {
+    Serial.printf("[QR] Payload (%u bytes) too long for a 2px-module code that fits the screen "
+                  "-- falling back to text screen\n", (unsigned)len);
     return false;
   }
 
@@ -2760,6 +2808,10 @@ void setupWiFiManager(bool forcePortal) {
     // .Update() has the identical dependency) — drawing directly here
     // sidesteps needing the update loop at all, matching drawFrame4's
     // exact content.
+    // v5.83: remember whether this portal opened on an UNATTENDED stealth wake
+    // (router/saved SSID unreachable on a timer wake) BEFORE the override below
+    // clears the flag — used to skip the big white QR square when nobody is there.
+    bool unattended = stealthThisWake;
     if (stealthThisWake) {
       stealthThisWake = false;
       display.displayOn();
@@ -2774,19 +2826,34 @@ void setupWiFiManager(bool forcePortal) {
     display.clear();
     display.setTextAlignment(TEXT_ALIGN_LEFT);
     display.setFont(ArialMT_Plain_10);
-    if (drawWifiQrCode()) {
-      // QR on the left, compact manual fallback on the right
-      display.drawString(62, 0,  "Scan to join,");
-      display.drawString(62, 11, "or select:");
-      display.drawString(62, 22, WIFI_AP_NAME);
-      display.drawString(62, 36, "then open:");
-      display.drawString(62, 47, "192.168.4.1");
+    if (!unattended && drawWifiQrCode()) {
+      // QR on the left, compact manual fallback in the 66px column on the right.
+      // v5.83: "ESP32-DHTSetup" is ~84px at 10pt — wider than the column, so it was
+      // clipped at the screen edge. Break after the hyphen onto its own line and
+      // flow the remaining lines down at a fixed 10px pitch (six lines end at
+      // y=60). A short name still takes a single line.
+      String ap = WIFI_AP_NAME;
+      int y = 0;
+      display.drawString(62, y, "Scan to join,"); y += 10;
+      display.drawString(62, y, "or select:");    y += 10;
+      int dash = ap.indexOf('-');
+      if (ap.length() > 11 && dash > 0) {
+        display.drawString(62, y, ap.substring(0, dash + 1)); y += 10;
+        display.drawString(62, y, ap.substring(dash + 1));    y += 10;
+      } else {
+        display.drawString(62, y, ap);                         y += 10;
+      }
+      display.drawString(62, y, "then open:");   y += 10;
+      display.drawString(62, y, "192.168.4.1");
     } else {
-      // QR payload didn't fit — original full-width text screen, unchanged
+      // Unattended stealth wake (QR skipped) or QR payload didn't fit — plain
+      // full-width text screen
       display.drawString(0, 0, "WIFI SETUP");
       display.drawLine(0, 12, 128, 12);
       display.drawString(0, 14, "1. Join WiFi network:");
-      display.setFont(ArialMT_Plain_16);
+      // v5.83: 16pt only fits short names (~9 chars in 124px) — longer ones clipped
+      if (String(WIFI_AP_NAME).length() > 9) display.setFont(ArialMT_Plain_10);
+      else                                    display.setFont(ArialMT_Plain_16);
       display.drawString(4, 24, WIFI_AP_NAME);
       display.setFont(ArialMT_Plain_10);
       display.drawString(0, 42, "2. Open browser:");
@@ -5451,7 +5518,7 @@ void setupOTA() {
     sendPage(h + pageFoot());
   });
   server.on("/reset_wifi", HTTP_GET, []() {
-    server.send(200,F("text/html"),actionPage("&#x1F4E1;","Resetting WiFi","Connect to ESP32-Setup AP then browse to 192.168.4.1",5));
+    server.send(200,F("text/html"),actionPage("&#x1F4E1;","Resetting WiFi",String("Connect to ") + WIFI_AP_NAME + " AP then browse to 192.168.4.1",5));
     delay(1000); WiFiManager wm; wm.resetSettings(); ESP.restart();
   });
   server.on("/reset", HTTP_GET, []() {

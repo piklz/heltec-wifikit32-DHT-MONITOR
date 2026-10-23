@@ -145,16 +145,19 @@ jobs:
           arduino-cli lib install "ArduinoJson@7.4.3"
           arduino-cli lib install "OneButton@2.6.2"
           arduino-cli lib install "JLed@4.15.0"
-          # Compile the pinned encoder as sketch-local source so another qrcode.h
-          # from the ESP32 core or an installed library cannot shadow it.
+          # v5.83: the QR encoder (ricmoo/QRCode v0.0.1, commit 5ba5d5b, MIT) is now
+          # COMMITTED in the repo at <sketch>/src/ricmoo_qrcode/ and included by explicit
+          # path, so another qrcode.h from the ESP32 core or a library cannot shadow it.
+          # CI used to clone it on every build, which hid the dependency: a fresh clone of
+          # the repo could not compile. No network fetch now; fail early and loudly instead
+          # if the files were forgotten.
           SKETCH_DIR=$(dirname "$(find . -name "*.ino" -print -quit)")
-          QR_SOURCE_DIR=$(mktemp -d)
-          git clone --branch v0.0.1 --depth 1 https://github.com/ricmoo/QRCode.git "$QR_SOURCE_DIR/QRCode"
-          rm -rf "$SKETCH_DIR/src/ricmoo_qrcode"
-          mkdir -p "$SKETCH_DIR/src/ricmoo_qrcode"
-          cp "$QR_SOURCE_DIR/QRCode/src/qrcode.c" "$SKETCH_DIR/src/ricmoo_qrcode/qrcode.c"
-          cp "$QR_SOURCE_DIR/QRCode/src/qrcode.h" "$SKETCH_DIR/src/ricmoo_qrcode/qrcode.h"
-          rm -rf "$QR_SOURCE_DIR"
+          for f in qrcode.c qrcode.h; do
+            if [ ! -f "$SKETCH_DIR/src/ricmoo_qrcode/$f" ]; then
+              echo "::error::Missing $SKETCH_DIR/src/ricmoo_qrcode/$f - the vendored QR encoder must be committed to the repo."
+              exit 1
+            fi
+          done
 
       - name: Compile Heltec V2 Binary
         run: |
@@ -283,14 +286,24 @@ jobs:
           echo "Web-flash assets ready:"
           ls -la build/firmware-*.bin
 
+          # v5.83: the in-browser installer (flash.html -> manifest.json) loads its
+          # binaries from raw.githubusercontent.com/<repo>/main/web-firmware/ because
+          # GitHub release downloads send no CORS header, so a web page cannot fetch
+          # them. That folder had been committed by hand and went stale (v5.80 while
+          # the latest release was v5.82), so the Install button flashed an old build.
+          # Refresh it on every release; the next step commits it with the manifest.
+          mkdir -p web-firmware
+          cp build/firmware-app.bin build/firmware-bootloader.bin \
+             build/firmware-partitions.bin build/firmware-boot_app0.bin web-firmware/
+
       - name: Commit Updated Manifest Back to Repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add firmware/manifest.json
+          git add firmware/manifest.json web-firmware/
           # Only commit if changes exist to prevent empty run loops. [skip ci] prevents triggering cloud push builds.
-          git diff-index --quiet HEAD || git commit -m "chore: automated manifest update for v${{ steps.process_artifacts.outputs.version }} [skip ci]"
+          git diff-index --quiet HEAD || git commit -m "chore: automated manifest + web-flash update for v${{ steps.process_artifacts.outputs.version }} [skip ci]"
           # Pull any changes that happened remotely during the compilation process
           git pull --rebase origin main
 
@@ -311,4 +324,4 @@ jobs:
           draft: false
           prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}QR code on the WiFi config-porta
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
