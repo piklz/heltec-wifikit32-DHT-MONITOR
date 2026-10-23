@@ -59,6 +59,35 @@
     cursor: pointer;
   }
   a { color: var(--accent); }
+  .release {
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    margin: 22px 0;
+    padding: 16px 0;
+  }
+  .release h2 { font-size: 15px; margin: 0 0 12px; }
+  .release dl {
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr);
+    gap: 7px 12px;
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .release dt { color: var(--muted); }
+  .release dd { margin: 0; overflow-wrap: anywhere; }
+  .release ul { margin: 14px 0 0; }
+  .warning {
+    border-left: 3px solid #d29922;
+    padding: 2px 0 2px 12px;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  @media (max-width: 480px) {
+    .card { padding: 22px 18px; }
+    .release dl { grid-template-columns: 86px minmax(0, 1fr); }
+  }
 </style>
 </head>
 <body>
@@ -71,14 +100,29 @@
       not supported in Firefox, Safari, or on mobile).
     </div>
 
+    <section class="release" aria-labelledby="release-title">
+      <h2 id="release-title">This release</h2>
+      <dl aria-live="polite">
+        <dt>Version</dt><dd id="release-version">Loading latest release...</dd>
+        <dt>Build date</dt><dd id="release-date">—</dd>
+        <dt>App image</dt><dd id="release-size">—</dd>
+        <dt>CRC32</dt><dd id="release-crc">—</dd>
+        <dt>Changes</dt><dd id="release-changelog">—</dd>
+      </dl>
+      <ul>
+        <li>Target: Heltec WiFi Kit 32 V2 / V2.1, ESP32; DHT22 sensor on GPIO 2</li>
+        <li>Flash layout: bootloader, partition table, boot support image, and application</li>
+      </ul>
+    </section>
+
     <ul>
       <li>Connect the board via USB</li>
       <li>Click the button below, then pick the correct serial port</li>
-      <li>Always installs the <strong>latest</strong> published release — no need to pick a version</li>
-      <li>This fully erases and re-flashes the board (bootloader + partitions + app) — use this for
-          a brand-new board or full recovery, not routine updates. Once running, the device updates
-          itself over WiFi from the dashboard.</li>
+      <li>Installs the <strong>latest</strong> published release; this page does not offer older versions</li>
+      <li>After connection, ESP Web Tools shows the install stages and progress in its dialog. The erase prompt is provided before writing.</li>
     </ul>
+
+    <p class="warning"><strong>Full erase:</strong> this rewrites the bootloader, partition table, and app, and removes saved device settings such as Wi-Fi and MQTT configuration. The installer detects the ESP32 family, not the exact board model, so confirm this is a Heltec WiFi Kit 32 V2/V2.1 before proceeding. Use for a new board or recovery, not routine updates. Once running, update over Wi-Fi from the dashboard.</p>
 
     <esp-web-install-button manifest="manifest.json">
       <button slot="activate">Connect &amp; Install</button>
@@ -88,5 +132,33 @@
       Source: <a href="https://github.com/piklz/heltec-wifikit32-DHT-MONITOR">heltec-wifikit32-DHT-MONITOR</a>
     </p>
   </div>
+  <script>
+    const releaseFields = {
+      version: document.getElementById("release-version"),
+      date: document.getElementById("release-date"),
+      size: document.getElementById("release-size"),
+      crc: document.getElementById("release-crc"),
+      changelog: document.getElementById("release-changelog")
+    };
+
+    fetch("firmware/manifest.json", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error("Release metadata could not be loaded");
+        return response.json();
+      })
+      .then((release) => {
+        releaseFields.version.textContent = `v${release.version || "unknown"}`;
+        releaseFields.date.textContent = release.build_date || "Not provided";
+        releaseFields.size.textContent = Number.isFinite(release.size)
+          ? `${release.size.toLocaleString()} bytes`
+          : "Not provided";
+        releaseFields.crc.textContent = release.crc32 || "Not provided";
+        releaseFields.changelog.textContent = release.changelog || "No changelog provided";
+      })
+      .catch(() => {
+        releaseFields.version.textContent = "Unavailable";
+        releaseFields.changelog.textContent = "Open this page from its hosted HTTPS site to load release details.";
+      });
+  </script>
 </body>
 </html>
